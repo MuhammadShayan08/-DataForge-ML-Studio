@@ -131,24 +131,41 @@ PLAN_LIMITS = {
 
 def get_user_plan(email: str) -> str:
     """Returns 'free', 'pro', or 'enterprise'"""
+    # First check Google Sheet for approval
+    approval = check_approval_status(email)
+    if approval["approved"]:
+        # Auto-upgrade user in local DB if approved in sheet
+        users_db = load_json(USERS_FILE)
+        if email in users_db:
+            current_plan = users_db[email].get("plan", "free")
+            if current_plan != approval["plan"]:
+                # Upgrade user automatically
+                users_db[email]["plan"] = approval["plan"]
+                users_db[email]["plan_since"] = now_str()[:10]
+                users_db[email]["plan_expiry"] = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+                users_db[email]["plan_approved_via"] = "google_sheet"
+                users_db[email]["plan_approved_txn"] = approval.get("txn_id", "")
+                save_json(USERS_FILE, users_db)
+        return approval["plan"]
+    
+    # Fallback to local DB
     users_db = load_json(USERS_FILE)
     user = users_db.get(email, {})
     plan = user.get("plan", "free")
+    
     # Check if pro plan has expired (if expiry date set)
     plan_expiry = user.get("plan_expiry", None)
     if plan_expiry and plan != "free":
         try:
             expiry_dt = datetime.strptime(plan_expiry, "%Y-%m-%d")
             if datetime.now() > expiry_dt:
-                # Downgrade to free
                 users_db[email]["plan"] = "free"
                 users_db[email]["plan_expired"] = True
                 save_json(USERS_FILE, users_db)
                 return "free"
         except:
-            pass
-    return plan if plan in PLAN_LIMITS else "free"
-
+                pass
+        return plan if plan in PLAN_LIMITS else "free"
 def get_plan_limits(email: str) -> dict:
     plan = get_user_plan(email)
     return PLAN_LIMITS[plan]
@@ -275,6 +292,84 @@ def notify_signin(user: dict):
  Last Seen        : {u_hist.get('last_login', 'First time')}
 ══════════════════════════════════════════"""
     send_email(subject, body)
+    
+# ─────────────────────────────────────────────
+#  GOOGLE SHEETS INTEGRATION
+# ─────────────────────────────────────────────
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+# Google Sheets Setup
+GOOGLE_SHEET_NAME = "DataForge Payments"
+GOOGLE_CREDENTIALS_FILE = "dataforge-credentials.json"
+
+def get_sheets_client():
+    """Connect to Google Sheets"""
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CREDENTIALS_FILE, scope)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        st.error(f"❌ Google Sheets connection failed: {e}")
+        return None
+
+def add_payment_to_sheet(payment_data):
+    """Add payment submission to Google Sheet"""
+    try:
+        client = get_sheets_client()
+        if not client:
+            return False
+        
+        sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+        
+        # Prepare row data
+        row = [
+            payment_data.get("time", ""),
+            payment_data.get("name", ""),
+            payment_data.get("email", ""),
+            payment_data.get("plan", ""),
+            payment_data.get("billing", ""),
+            str(payment_data.get("amount_usd", "")),
+            str(payment_data.get("amount_rs", "")),
+            payment_data.get("txn_id", ""),
+            payment_data.get("note", ""),
+            payment_data.get("screenshot", ""),
+            payment_data.get("status", "pending"),
+            "NO"  # Approved column - default NO
+        ]
+        
+        sheet.append_row(row)
+        return True
+    except Exception as e:
+        print(f"Sheet add error: {e}")
+        return False
+
+def check_approval_status(email: str) -> dict:
+    """Check if user has been approved for Pro plan in Google Sheet"""
+    try:
+        client = get_sheets_client()
+        if not client:
+            return {"approved": False, "plan": "free"}
+        
+        sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+        all_records = sheet.get_all_records()
+        
+        # Find user's latest approved payment
+        for record in reversed(all_records):  # Check from latest
+            if record.get("Email", "").lower() == email.lower():
+                if str(record.get("Approved", "")).upper() == "YES":
+                    return {
+                        "approved": True,
+                        "plan": record.get("Plan", "pro"),
+                        "billing": record.get("Billing", "Monthly"),
+                        "txn_id": record.get("TxnID", ""),
+                    }
+        
+        return {"approved": False, "plan": "free"}
+    except Exception as e:
+        print(f"Sheet check error: {e}")
+        return {"approved": False, "plan": "free"}
 
 # ─────────────────────────────────────────────
 #  USER HISTORY HELPERS
@@ -1889,52 +1984,96 @@ if st.session_state.data is not None:
             screenshot = st.file_uploader("📸 Payment Screenshot (optional but recommended)", type=["png","jpg","jpeg","pdf"], key="jc_screenshot")
 
             jb1, jb2 = st.columns(2)
-            with jb1:
-                if st.button("✅ Submit Payment Proof", key="submit_jc", use_container_width=True):
-                    if not txn_id:
-                        st.error("❌ Transaction ID is required!")
-                    else:
-                        pending = load_json("dataforge_pending_payments.json")
-                        pending[f"{uemail_global}_{now_str()[:10]}"] = {
-                            "name": uname_global, "email": uemail_global,
-                            "plan": "pro", "billing": billing_label,
-                            "amount_usd": pro_price_usd, "amount_rs": jc_amount or str(pro_price_rs),
-                            "txn_id": txn_id, "note": jc_note, "time": now_str(),
-                            "status": "pending", "screenshot": "uploaded" if screenshot else "none"
-                        }
-                        save_json("dataforge_pending_payments.json", pending)
-                        log_activity(uemail_global, "payment_submitted", f"JazzCash TxnID: {txn_id} — Rs {jc_amount}")
+    with jb1:
+        if st.button("✅ Submit Payment Proof", key="submit_jc", use_container_width=True):
+            if not txn_id:
+                st.error("❌ Transaction ID is required!")
+            else:
+                # Save screenshot if uploaded
+                screenshot_path = None
+                if screenshot:
+                    try:
+                        os.makedirs("payment_screenshots", exist_ok=True)
+                        screenshot_filename = f"{uemail_global.replace('@','_')}_{now_str()[:10]}_{txn_id}.{screenshot.name.split('.')[-1]}"
+                        screenshot_path = os.path.join("payment_screenshots", screenshot_filename)
+                        with open(screenshot_path, "wb") as f:
+                            f.write(screenshot.getbuffer())
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not save screenshot: {e}")
+                
+                # Prepare payment data
+                payment_data = {
+                    "name": uname_global,
+                    "email": uemail_global,
+                    "plan": "pro",
+                    "billing": billing_label,
+                    "amount_usd": pro_price_usd,
+                    "amount_rs": jc_amount or str(pro_price_rs),
+                    "txn_id": txn_id,
+                    "note": jc_note,
+                    "time": now_str(),
+                    "screenshot": screenshot_path if screenshot_path else "none",
+                    "status": "pending"
+                }
+                
+                # Save to local JSON (backup)
+                pending = load_json("dataforge_pending_payments.json")
+                pending[f"{uemail_global}_{now_str()[:10]}"] = payment_data
+                save_json("dataforge_pending_payments.json", pending)
+                
+                # Add to Google Sheet
+                sheet_added = add_payment_to_sheet(payment_data)
+                
+                # Log activity
+                log_activity(uemail_global, "payment_submitted", f"JazzCash TxnID: {txn_id} — Rs {jc_amount}")
+                
+                # Prepare email body with screenshot attachment
+                screenshot_bytes = None
+                screenshot_name = None
+                if screenshot_path and os.path.exists(screenshot_path):
+                    try:
+                        with open(screenshot_path, "rb") as f:
+                            screenshot_bytes = f.read()
+                        screenshot_name = os.path.basename(screenshot_path)
+                    except:
+                        pass
+                
+                # Send email with attachment
+                send_email(
+                    f"💰 DataForge — JazzCash Payment! {uname_global} | Rs {jc_amount or pro_price_rs}",
+                    f"""
+    NEW JAZZCASH PAYMENT — VERIFY & ACTIVATE
+    ════════════════════════════════════════
+    User     : {uname_global}
+    Email    : {uemail_global}
+    Plan     : Pro ({billing_label})
+    Amount   : ${pro_price_usd} USD = Rs {jc_amount or pro_price_rs}
+    TxnID    : {txn_id}
+    Screenshot: {"✅ Attached to email + Saved at: " + screenshot_path if screenshot_path else "❌ Not uploaded"}
+    Note     : {jc_note or "—"}
+    Time     : {now_str()}
 
-                        send_email(
-                            f"💰 DataForge — JazzCash Payment! {uname_global} | Rs {jc_amount or pro_price_rs}",
-                            f"""
-NEW JAZZCASH PAYMENT — VERIFY & ACTIVATE
-════════════════════════════════════════
-User     : {uname_global}
-Email    : {uemail_global}
-Plan     : Pro ({billing_label})
-Amount   : ${pro_price_usd} USD = Rs {jc_amount or pro_price_rs}
-TxnID    : {txn_id}
-Screenshot: {"✅ Uploaded" if screenshot else "❌ Not uploaded"}
-Note     : {jc_note or "—"}
-Time     : {now_str()}
-════════════════════════════════════════
-TO ACTIVATE: Run this in your server:
-python -c "
-import json
-db = json.load(open('dataforge_users.json'))
-db['{uemail_global}']['plan'] = 'pro'
-db['{uemail_global}']['plan_since'] = '{now_str()[:10]}'
-db['{uemail_global}']['plan_expiry'] = '{(datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")}'
-json.dump(db, open('dataforge_users.json','w'), indent=2)
-print('✅ Done')
-"
-════════════════════════════════════════"""
-                        )
+    {'✅ Added to Google Sheet successfully!' if sheet_added else '⚠️ Could not add to Google Sheet - check manually'}
 
-                        st.session_state["show_jazzcash_pro"] = False
-                        st.success(f"✅ **Payment proof submitted successfully!**\nTransaction ID: `{txn_id}`\nWe will verify and activate your Pro plan within 24 hours.")
-                        st.balloons()
+    TO APPROVE: 
+    1. Open Google Sheet: {GOOGLE_SHEET_NAME}
+    2. Find row for {uemail_global}
+    3. Change "Approved" column (L) to "YES"
+    4. User will get Pro access automatically on next login!
+
+    Screenshot location: {screenshot_path if screenshot_path else "Not uploaded"}
+    ════════════════════════════════════════""",
+                    attachment_bytes=screenshot_bytes,
+                    attachment_name=screenshot_name,
+                    attachment_mime="image/png" if screenshot_name and screenshot_name.endswith(".png") else "image/jpeg"
+                )
+                
+                st.session_state["show_jazzcash_pro"] = False
+                if sheet_added:
+                    st.success(f"✅ **Payment proof submitted successfully!**\n\n📊 Added to Google Sheet for approval\n\nTransaction ID: `{txn_id}`\n\n{'📸 Screenshot saved & emailed!' if screenshot_path else '⚠️ No screenshot uploaded.'}\n\n**Next Steps:** We will verify your payment and approve within 24 hours. You'll see Pro features automatically on your next login!")
+                else:
+                    st.warning(f"⚠️ **Payment submitted but Google Sheet sync failed.**\n\nTransaction ID: `{txn_id}`\n\nWe received your payment info via email. Manual approval needed.")
+                st.balloons()
 
             with jb2:
                 if st.button("✕ Cancel", key="cancel_jc", use_container_width=True):
