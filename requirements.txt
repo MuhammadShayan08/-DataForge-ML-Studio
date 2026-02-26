@@ -1,12 +1,5 @@
-# Web Framework
 streamlit==1.41.0
-
-# Data Processing
-pandas==2.2.2
+pandas==2.1.4
 numpy==1.26.4
-
-# Visualization
-plotly==5.22.0
-
-# Machine Learning
+plotly==5.18.0
 pycaret==3.3.2
