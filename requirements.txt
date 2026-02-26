@@ -1,0 +1,16 @@
+# Web Framework
+streamlit>=1.30.0
+
+# Data Manipulation
+pandas>=2.0.0
+numpy<2.0.0
+
+# Machine Learning (AutoML)
+pycaret[full]>=3.2.0
+
+# Visualization
+plotly>=5.18.0
+
+# Security & Utilities
+cryptography
+python-dotenv
