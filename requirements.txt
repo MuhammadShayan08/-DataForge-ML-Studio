@@ -1,0 +1,12 @@
+# Web Framework
+streamlit
+
+# Data Processing
+pandas
+numpy
+
+# Visualization
+plotly
+
+# Machine Learning
+pycaret
