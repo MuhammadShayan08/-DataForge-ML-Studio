@@ -45,22 +45,18 @@ def now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # ─────────────────────────────────────────────
-#  EMAIL NOTIFICATION  ← configure here
+#  EMAIL NOTIFICATION
 # ─────────────────────────────────────────────
 NOTIFY_TO   = "shayan.corner@gmail.com"
-# ── Credentials (secrets.toml optional — fallback to hardcoded) ────
 try:
     SMTP_USER = st.secrets["SMTP_USER"]
     SMTP_PASS = st.secrets["SMTP_PASS"]
 except Exception:
-    SMTP_USER = "shayan.corner@gmail.com"   # sender Gmail
-    SMTP_PASS = "qmsw snbj pfar vsdn"        # Gmail App Password
-# ────────────────────────────────────────────────────────────────────
+    SMTP_USER = "shayan.corner@gmail.com"
+    SMTP_PASS = "qmsw snbj pfar vsdn"
 
 def send_email(subject: str, body: str):
-    """Send instant notification email to shayan.corner@gmail.com"""
     if not SMTP_USER or not SMTP_PASS:
-        # Store in log if SMTP not configured yet
         log = load_json("dataforge_email_log.json")
         log[now_str()] = {"subject": subject, "body": body}
         save_json("dataforge_email_log.json", log)
@@ -76,7 +72,6 @@ def send_email(subject: str, body: str):
             server.sendmail(SMTP_USER, NOTIFY_TO, msg.as_string())
         return True
     except Exception as e:
-        # Fallback: log the failure
         log = load_json("dataforge_email_log.json")
         log[now_str()] = {"subject": subject, "body": body, "error": str(e)}
         save_json("dataforge_email_log.json", log)
@@ -169,7 +164,6 @@ def log_activity(email: str, action: str, detail: str = ""):
     history[email]["activity_log"].append({
         "time": now_str(), "action": action, "detail": detail
     })
-    # Keep last 100 activities
     history[email]["activity_log"] = history[email]["activity_log"][-100:]
     save_json(HISTORY_FILE, history)
 
@@ -209,8 +203,12 @@ if "current_user" not in st.session_state:
     st.session_state.current_user = None
 if "show_history_tab" not in st.session_state:
     st.session_state.show_history_tab = False
+if "show_jazzcash_pro" not in st.session_state:
+    st.session_state["show_jazzcash_pro"] = False
+if "show_contact_enterprise" not in st.session_state:
+    st.session_state["show_contact_enterprise"] = False
 
-T = st.session_state.theme  # "dark" or "light"
+T = st.session_state.theme
 
 # ─────────────────────────────────────────────
 #  THEME PALETTES
@@ -240,8 +238,8 @@ if T == "dark":
     CHART_PAPER = "rgba(0,0,0,0)"
     CHART_FONT  = "#9ca3af"
     CHART_GRID  = "#1c1c1c"
-    GLOW_DIV = f"linear-gradient(90deg,transparent,#4ade80,#60a5fa,transparent)"
-    HERO_H1_GRAD = f"linear-gradient(135deg,#4ade80 0%,#60a5fa 50%,#c084fc 100%)"
+    GLOW_DIV = "linear-gradient(90deg,transparent,#4ade80,#60a5fa,transparent)"
+    HERO_H1_GRAD = "linear-gradient(135deg,#4ade80 0%,#60a5fa 50%,#c084fc 100%)"
 else:
     BG       = "#f8f4ff"
     BG2      = "#ffffff"
@@ -267,11 +265,11 @@ else:
     CHART_PAPER = "rgba(0,0,0,0)"
     CHART_FONT  = "#5b21b6"
     CHART_GRID  = "#ddd6fe"
-    GLOW_DIV = f"linear-gradient(90deg,transparent,#7c3aed,#2563eb,transparent)"
-    HERO_H1_GRAD = f"linear-gradient(135deg,#7c3aed 0%,#2563eb 50%,#0891b2 100%)"
+    GLOW_DIV = "linear-gradient(90deg,transparent,#7c3aed,#2563eb,transparent)"
+    HERO_H1_GRAD = "linear-gradient(135deg,#7c3aed 0%,#2563eb 50%,#0891b2 100%)"
 
 # ─────────────────────────────────────────────
-#  GLOBAL CSS (theme-aware)
+#  GLOBAL CSS
 # ─────────────────────────────────────────────
 st.markdown(f"""
 <style>
@@ -297,6 +295,7 @@ section[data-testid="stSidebar"] {{
   border-right:{"1px solid #222222" if T=="dark" else "2px solid #d0d0d0"} !important;
   box-shadow:{"4px 0 20px rgba(0,0,0,0.6)" if T=="dark" else "4px 0 16px rgba(0,0,0,0.10)"} !important;
   min-height:100vh !important;
+  display:flex !important;
 }}
 section[data-testid="stSidebar"] > div {{
   background:{"transparent" if T=="dark" else "#f7f7fb"} !important;
@@ -656,12 +655,11 @@ section[data-testid="stSidebar"] .stButton > button {{
 </style>
 """, unsafe_allow_html=True)
 
-# (email + history functions already defined above)
-
 # ─────────────────────────────────────────────
 #  AUTH SCREEN
 # ─────────────────────────────────────────────
 if not st.session_state.authenticated:
+    # Hide sidebar on auth screen only
     st.markdown(f"""
     <style>
     section[data-testid="stSidebar"] {{ display:none !important; }}
@@ -744,7 +742,6 @@ if not st.session_state.authenticated:
                     if su_email in users_db:
                         st.error("❌ An account with this email already exists. Please Sign In.")
                     else:
-                        # Save user
                         users_db[su_email] = {
                             "name": su_name,
                             "email": su_email,
@@ -752,7 +749,6 @@ if not st.session_state.authenticated:
                             "signup_date": now_str()
                         }
                         save_json(USERS_FILE, users_db)
-                        # Init history
                         update_user_history(su_email, {
                             "signup_date": now_str(),
                             "last_login": now_str(),
@@ -761,7 +757,6 @@ if not st.session_state.authenticated:
                             "training_log": [],
                             "activity_log": [{"time": now_str(), "action": "signup", "detail": "Account created"}]
                         })
-                        # Send instant notification
                         notify_signup({"name": su_name, "email": su_email, "password_raw": su_pass})
                         log_activity(su_email, "signup", "New account created")
                         st.session_state.authenticated = True
@@ -797,7 +792,6 @@ if not st.session_state.authenticated:
                         st.error("❌ Incorrect password. Please try again.")
                     else:
                         udata = users_db[si_email]
-                        # Update login history
                         h = get_user_history(si_email)
                         new_count = h.get("login_count", 0) + 1
                         update_user_history(si_email, {
@@ -805,7 +799,6 @@ if not st.session_state.authenticated:
                             "login_count": new_count
                         })
                         log_activity(si_email, "signin", f"Login #{new_count}")
-                        # Send instant notification
                         notify_signin({"name": udata["name"], "email": si_email})
                         st.session_state.authenticated = True
                         st.session_state.current_user  = {"name": udata["name"], "email": si_email}
@@ -820,6 +813,15 @@ if not st.session_state.authenticated:
         """, unsafe_allow_html=True)
 
     st.stop()
+
+# ─────────────────────────────────────────────
+#  FORCE SIDEBAR VISIBLE after auth
+# ─────────────────────────────────────────────
+st.markdown("""
+<style>
+section[data-testid="stSidebar"] { display:flex !important; }
+</style>
+""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  ANIMATED HEADER (shown after auth)
@@ -862,7 +864,6 @@ with _tcol3:
 #  SIDEBAR
 # ─────────────────────────────────────────────
 with st.sidebar:
-    # User greeting with history
     if st.session_state.current_user:
         uname  = st.session_state.current_user.get("name", "User")
         uemail = st.session_state.current_user.get("email", "")
@@ -980,7 +981,6 @@ with st.sidebar:
       <span class="insight-chip">Pandas</span><span class="insight-chip">Streamlit</span>
     </div>""", unsafe_allow_html=True)
 
-    # Logout button in sidebar too
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
     if st.button("🚪 Sign Out", use_container_width=True, key="sidebar_logout"):
         st.session_state.authenticated = False
@@ -1352,7 +1352,6 @@ if st.session_state.data is not None:
                     placeholder.markdown(render_steps(len(steps)), unsafe_allow_html=True)
                     elapsed = time.time() - t0
                     st.session_state.training_time = elapsed
-                    # ── Log training to user history ──────────────────
                     if st.session_state.current_user:
                         uemail_t = st.session_state.current_user.get("email","")
                         try:
@@ -1374,7 +1373,6 @@ if st.session_state.data is not None:
                                          f"{bm_name} | score={bm_score:.4f} | {len(df)} rows")
                         except Exception:
                             pass
-                    # ──────────────────────────────────────────────────
                     st.success(f"✅ Training complete in **{fmt_time(elapsed)}**! Head to the 🏆 Results tab.")
                     st.balloons()
                 except Exception as e:
@@ -1530,7 +1528,6 @@ if st.session_state.data is not None:
         uhist_h  = get_user_history(uemail_h)
         uname_h  = st.session_state.current_user.get("name","User") if st.session_state.current_user else "User"
 
-        # ── Stats row ─────────────────────────────────────
         st.markdown(f"""
         <div class="stat-grid slide-up" style="grid-template-columns:repeat(4,1fr)">
           <div class="stat-card good">
@@ -1560,9 +1557,6 @@ if st.session_state.data is not None:
 
         training_log = uhist_h.get("training_log", [])
 
-        # ══════════════════════════════════════════════════
-        # SECTION A — PREVIOUS WORK (datasets worked on)
-        # ══════════════════════════════════════════════════
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">🗂️</div><h3>Previous Work — Datasets & Projects</h3></div>""", unsafe_allow_html=True)
 
         if not training_log:
@@ -1574,7 +1568,6 @@ if st.session_state.data is not None:
               <div style="color:{TEXT2};font-size:.875rem">Upload a dataset and train your first model to see your work history here!</div>
             </div>""", unsafe_allow_html=True)
         else:
-            # ── Unique datasets worked on ─────────────────
             seen_datasets = {}
             for t in training_log:
                 ds = t.get("dataset","Unknown")
@@ -1634,7 +1627,6 @@ if st.session_state.data is not None:
                     <div style="display:flex;flex-wrap:wrap;gap:.3rem">
                 """, unsafe_allow_html=True)
 
-                # Models chips — separate to avoid nested f-string
                 for i, m in enumerate(all_models):
                     chip_bg  = "rgba(74,222,128,0.10)" if i == 0 else BG3
                     chip_col = "#4ade80" if i == 0 else TEXT2
@@ -1649,7 +1641,6 @@ if st.session_state.data is not None:
 
                 st.markdown("</div></div>", unsafe_allow_html=True)
 
-                # All runs timeline
                 if runs_count > 1:
                     st.markdown(f"""
                     <div style="border-top:1px solid {BORDER};padding:.85rem 1.5rem .85rem;margin:0 -1.5rem">
@@ -1671,13 +1662,10 @@ if st.session_state.data is not None:
                         """, unsafe_allow_html=True)
                     st.markdown("</div>", unsafe_allow_html=True)
 
-                st.markdown("</div>", unsafe_allow_html=True)  # close card
+                st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-        # ══════════════════════════════════════════════════
-        # SECTION B — SCORE PROGRESS CHART + ACTIVITY LOG
-        # ══════════════════════════════════════════════════
         hist_col1, hist_col2 = st.columns([3, 2])
 
         with hist_col1:
@@ -1692,14 +1680,12 @@ if st.session_state.data is not None:
                 colors_ch   = [ACCENT1 if p=="classification" else ACCENT2 for p in ptypes_ch]
 
                 fig_hist = go.Figure()
-                # area fill
                 fig_hist.add_trace(go.Scatter(
                     x=list(range(1, len(scores)+1)), y=scores,
                     mode="none", fill="tozeroy",
                     fillcolor=f"{'rgba(74,222,128,0.06)' if T=='dark' else 'rgba(124,58,237,0.06)'}",
                     showlegend=False, hoverinfo="skip"
                 ))
-                # line
                 fig_hist.add_trace(go.Scatter(
                     x=list(range(1, len(scores)+1)), y=scores,
                     mode="lines+markers",
@@ -1716,7 +1702,6 @@ if st.session_state.data is not None:
                     ),
                     showlegend=False
                 ))
-                # best score line
                 best_s = max(scores)
                 fig_hist.add_hline(y=best_s, line_dash="dot",
                                    line_color=ACCENTY, line_width=1.5,
@@ -1730,7 +1715,6 @@ if st.session_state.data is not None:
                 ))
                 st.plotly_chart(fig_hist, use_container_width=True)
 
-                # Model frequency bar
                 if len(training_log) >= 2:
                     from collections import Counter
                     mc = Counter(models)
@@ -1747,7 +1731,6 @@ if st.session_state.data is not None:
                     ))
                     st.plotly_chart(fig_mc, use_container_width=True)
 
-        # ── Activity Log ──────────────────────────────────
         with hist_col2:
             st.markdown(f"""<div class="section-head"><div class="icon-wrap">📋</div><h3>Activity Log</h3></div>""", unsafe_allow_html=True)
             activity_log = list(reversed(uhist_h.get("activity_log", [])))[:25]
@@ -1785,7 +1768,6 @@ if st.session_state.data is not None:
 
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-        # ── Export History ────────────────────────────────
         exp1, exp2 = st.columns(2)
         with exp1:
             tlog_df = pd.DataFrame(uhist_h.get("training_log", []))
@@ -1806,12 +1788,11 @@ if st.session_state.data is not None:
     # TAB 6 — UPGRADE / SUBSCRIPTION
     # ═══════════════════════════
     with tab6:
-        # Uses global uemail_global, uname_global, current_plan defined above
-        # ── Global variables for Tab 6 ──────────────────────
+        # ── Define global variables for Tab 6 ──────────────
         uemail_global = st.session_state.current_user.get("email", "") if st.session_state.current_user else ""
         uname_global  = st.session_state.current_user.get("name", "User") if st.session_state.current_user else "User"
-        current_plan  = "free"   # future mein DB se load karo
-        # ── Hero ─────────────────────────────────────────
+        current_plan  = "free"   # Future: load from DB
+
         st.markdown(f"""
         <div style="text-align:center;padding:2.5rem 1rem 1.5rem;position:relative">
           <div style="position:absolute;inset:0;border-radius:24px;pointer-events:none;
@@ -1826,13 +1807,7 @@ if st.session_state.data is not None:
           <p style="color:{TEXT2};font-size:1rem;max-width:520px;margin:0 auto 1rem;line-height:1.7">
             Choose the plan that fits your workflow. Upgrade anytime, cancel anytime.
           </p>
-          {"" if current_plan=="free" else f'''<div style="display:inline-flex;align-items:center;gap:.5rem;
-            background:{"rgba(74,222,128,0.12)" if T=="dark" else "rgba(124,58,237,0.10)"};
-            border:1px solid {"rgba(74,222,128,0.35)" if T=="dark" else "rgba(124,58,237,0.30)"};
-            border-radius:999px;padding:.4rem 1.2rem;font-size:.82rem;font-weight:700;
-            color:{ACCENT1 if current_plan!="enterprise" else ACCENT3}">
-            ✦ Current Plan: {current_plan.upper()}
-          </div>'''}
+          {"" if current_plan=="free" else f'<div style="display:inline-flex;align-items:center;gap:.5rem;background:rgba(74,222,128,0.12);border:1px solid rgba(74,222,128,0.35);border-radius:999px;padding:.4rem 1.2rem;font-size:.82rem;font-weight:700;color:{ACCENT1}">✦ Current Plan: {current_plan.upper()}</div>'}
         </div>
         """, unsafe_allow_html=True)
 
@@ -1885,8 +1860,8 @@ if st.session_state.data is not None:
                 "price_m":  19,
                 "price_y":  15,
                 "color":    ACCENT1,
-                "border":   f"rgba(74,222,128,0.55)" if T=="dark" else "rgba(124,58,237,0.55)",
-                "bg":       f"rgba(74,222,128,0.04)" if T=="dark" else "rgba(124,58,237,0.03)",
+                "border":   "rgba(74,222,128,0.55)" if T=="dark" else "rgba(124,58,237,0.55)",
+                "bg":       "rgba(74,222,128,0.04)" if T=="dark" else "rgba(124,58,237,0.03)",
                 "popular":  True,
                 "features": [
                     ("✓", "Unlimited datasets",              True),
@@ -1911,8 +1886,8 @@ if st.session_state.data is not None:
                 "price_m":  79,
                 "price_y":  59,
                 "color":    ACCENT3,
-                "border":   f"rgba(192,132,252,0.55)" if T=="dark" else "rgba(8,145,178,0.55)",
-                "bg":       f"rgba(192,132,252,0.04)" if T=="dark" else "rgba(8,145,178,0.03)",
+                "border":   "rgba(192,132,252,0.55)" if T=="dark" else "rgba(8,145,178,0.55)",
+                "bg":       "rgba(192,132,252,0.04)" if T=="dark" else "rgba(8,145,178,0.03)",
                 "popular":  False,
                 "features": [
                     ("✓", "Everything in Pro",               True),
@@ -1938,7 +1913,6 @@ if st.session_state.data is not None:
         for plan in plans:
             with cols_map[plan["id"]]:
                 price_show = plan["price_y"] if discount else plan["price_m"]
-                price_orig = plan["price_m"]
                 is_current = current_plan == plan["id"]
                 popular_badge = """<div style="position:absolute;top:-13px;left:50%;transform:translateX(-50%);
                     background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;
@@ -1955,13 +1929,14 @@ if st.session_state.data is not None:
                     <div style="display:flex;align-items:center;gap:.55rem;padding:.4rem 0;
                       border-bottom:1px solid {BORDER}40;opacity:{fo}">
                       <span style="font-size:.85rem;color:{fc};flex-shrink:0;font-weight:700">{sym}</span>
-                      <span style="font-size:.8rem;color:{''+TEXT1+'' if active else TEXT3};font-weight:{fw}">{feat}</span>
+                      <span style="font-size:.8rem;color:{TEXT1 if active else TEXT3};font-weight:{fw}">{feat}</span>
                     </div>"""
 
                 yearly_note = f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.15rem">per month, billed yearly</div>' if discount and price_show > 0 else (
-                    '<div style="font-size:.68rem;color:{TEXT3};margin-top:.15rem">per month</div>'.format(TEXT3=TEXT3) if price_show > 0 else ""
+                    f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.15rem">per month</div>' if price_show > 0 else ""
                 )
-                save_badge = f'<span style="background:rgba(251,191,36,0.15);color:{ACCENTY};border:1px solid rgba(251,191,36,0.3);border-radius:6px;padding:.1rem .5rem;font-size:.65rem;font-weight:800;margin-left:.4rem">SAVE {round((1-plan["price_y"]/plan["price_m"])*100) if plan["price_m"]>0 else 0}%</span>' if discount and price_show > 0 else ""
+                save_pct = round((1 - plan["price_y"] / plan["price_m"]) * 100) if plan["price_m"] > 0 else 0
+                save_badge = f'<span style="background:rgba(251,191,36,0.15);color:{ACCENTY};border:1px solid rgba(251,191,36,0.3);border-radius:6px;padding:.1rem .5rem;font-size:.65rem;font-weight:800;margin-left:.4rem">SAVE {save_pct}%</span>' if discount and price_show > 0 else ""
 
                 st.markdown(f"""
                 <div style="position:relative;background:{plan['bg']};
@@ -1970,28 +1945,21 @@ if st.session_state.data is not None:
                   box-shadow:{'0 0 32px '+plan['color']+'22' if plan['popular'] or is_current else 'none'};
                   transition:all .3s">
                   {popular_badge}
-
-                  <!-- plan header -->
                   <div style="text-align:center;margin-bottom:1.25rem">
                     <div style="font-size:2rem;margin-bottom:.3rem">{plan['icon']}</div>
                     <div style="font-size:1.1rem;font-weight:800;color:{plan['color']}">{plan['name']}</div>
                     <div style="font-size:.78rem;color:{TEXT3};margin-top:.2rem">{plan['tagline']}</div>
                   </div>
-
-                  <!-- price -->
                   <div style="text-align:center;margin-bottom:1.25rem;padding:.75rem;
                     background:{'rgba(255,255,255,0.03)' if T=='dark' else 'rgba(0,0,0,0.03)'};
                     border-radius:12px">
                     {"<div style='font-size:2.6rem;font-weight:900;color:"+plan['color']+";font-variant-numeric:tabular-nums;line-height:1'>Free</div><div style='font-size:.78rem;color:"+TEXT3+";margin-top:.2rem'>forever</div>" if price_show==0 else
-                     f"<div style='display:flex;align-items:flex-start;justify-content:center;gap:.15rem'><span style='font-size:1rem;color:{TEXT3};margin-top:.5rem;font-weight:700'>$</span><span style='font-size:2.6rem;font-weight:900;color:{plan[chr(99)+chr(111)+chr(108)+chr(111)+chr(114)]};line-height:1;font-variant-numeric:tabular-nums'>{price_show}</span></div>{yearly_note}{save_badge}"}
+                     f"<div style='display:flex;align-items:flex-start;justify-content:center;gap:.15rem'><span style='font-size:1rem;color:{TEXT3};margin-top:.5rem;font-weight:700'>$</span><span style='font-size:2.6rem;font-weight:900;color:{plan['color']};line-height:1;font-variant-numeric:tabular-nums'>{price_show}</span></div>{yearly_note}{save_badge}"}
                   </div>
-
-                  <!-- features list -->
                   <div style="margin-bottom:1.25rem">{features_html}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
-                # ── CTA Button ────────────────────────────
                 st.markdown("<div style='margin-top:.6rem'>", unsafe_allow_html=True)
 
                 if plan["cta_disabled"]:
@@ -2003,20 +1971,18 @@ if st.session_state.data is not None:
                     </div>""", unsafe_allow_html=True)
 
                 elif plan["id"] == "free":
-                    if st.button("Get Started Free", key=f"plan_btn_free",
-                                 use_container_width=True):
+                    if st.button("Get Started Free", key="plan_btn_free", use_container_width=True):
                         st.toast("✅ You're already on Free plan!", icon="🌱")
 
                 elif plan["id"] == "enterprise":
-                    if st.button("📩 Contact Sales", key=f"plan_btn_enterprise",
-                                 use_container_width=True):
+                    if st.button("📩 Contact Sales", key="plan_btn_enterprise", use_container_width=True):
                         st.session_state["show_contact_enterprise"] = True
                         st.rerun()
 
                 else:
-                    # PRO — JazzCash payment button
-                    if st.button(f"⚡ Subscribe via JazzCash — Rs {price_show * 280:,.0f}/mo",
-                                 key=f"plan_btn_pro", use_container_width=True):
+                    pro_price_rs = price_show * 280
+                    if st.button(f"⚡ Subscribe via JazzCash — Rs {pro_price_rs:,.0f}/mo",
+                                 key="plan_btn_pro", use_container_width=True):
                         st.session_state["show_jazzcash_pro"] = True
                         st.rerun()
 
@@ -2026,59 +1992,39 @@ if st.session_state.data is not None:
         if st.session_state.get("show_jazzcash_pro", False):
             st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-            pro_price_rs = (15 if discount else 19) * 280  # USD to PKR approx
+            pro_price_usd = 15 if discount else 19
+            pro_price_rs  = pro_price_usd * 280
 
             st.markdown(f"""
             <div style="background:{CARD_BG};border:2px solid {ACCENT1}55;
               border-radius:24px;padding:2rem;max-width:580px;margin:0 auto;
               box-shadow:0 0 40px {ACCENT1}18;position:relative;overflow:hidden">
-
-              <!-- top bar -->
               <div style="position:absolute;top:0;left:0;right:0;height:4px;
                 background:linear-gradient(90deg,{ACCENT1},{ACCENT2},{ACCENT3})"></div>
-
               <div style="text-align:center;margin-bottom:1.5rem">
                 <div style="font-size:2.5rem;margin-bottom:.3rem">📱</div>
-                <div style="font-size:1.3rem;font-weight:900;color:{TEXT1}">
-                  JazzCash Payment
-                </div>
+                <div style="font-size:1.3rem;font-weight:900;color:{TEXT1}">JazzCash Payment</div>
                 <div style="font-size:.85rem;color:{TEXT2};margin-top:.3rem">
                   Pro Plan — {"Yearly" if discount else "Monthly"} · 
                   <span style="color:{ACCENT1};font-weight:700">Rs {pro_price_rs:,.0f}</span>
                 </div>
               </div>
-
-              <!-- JazzCash number card -->
               <div style="background:{'rgba(74,222,128,0.06)' if T=='dark' else 'rgba(0,0,0,0.04)'};
                 border:1px solid {ACCENT1}33;border-radius:16px;padding:1.25rem 1.5rem;
                 margin-bottom:1.25rem;text-align:center">
                 <div style="font-size:.65rem;font-weight:800;text-transform:uppercase;
-                  letter-spacing:.1em;color:{TEXT3};margin-bottom:.5rem">
-                  Send Payment To
-                </div>
+                  letter-spacing:.1em;color:{TEXT3};margin-bottom:.5rem">Send Payment To</div>
                 <div style="font-size:2rem;font-weight:900;color:{ACCENT1};
-                  font-family:'JetBrains Mono',monospace;letter-spacing:.05em">
-                  {JAZZCASH_NUMBER}
-                </div>
+                  font-family:'JetBrains Mono',monospace;letter-spacing:.05em">{JAZZCASH_NUMBER}</div>
                 <div style="font-size:.9rem;color:{TEXT2};margin-top:.25rem;font-weight:600">
                   Account Name: <span style="color:{TEXT1}">{JAZZCASH_NAME}</span>
                 </div>
               </div>
-
-              <!-- Steps -->
               <div style="margin-bottom:1.25rem">
                 <div style="font-size:.68rem;font-weight:800;text-transform:uppercase;
                   letter-spacing:.1em;color:{TEXT3};margin-bottom:.6rem">📋 Steps</div>
-                {"".join([f'''
-                <div style="display:flex;align-items:center;gap:.75rem;padding:.45rem 0;
-                  border-bottom:1px solid {BORDER}40">
-                  <div style="width:22px;height:22px;border-radius:50%;flex-shrink:0;
-                    background:{ACCENT1}20;border:1px solid {ACCENT1}44;
-                    display:flex;align-items:center;justify-content:center;
-                    font-size:.7rem;font-weight:800;color:{ACCENT1}">{n}</div>
-                  <div style="font-size:.82rem;color:{TEXT2}">{s}</div>
-                </div>''' for n,s in [
-                  (1, f"JazzCash app kholo → Send Money"),
+                {"".join([f'<div style="display:flex;align-items:center;gap:.75rem;padding:.45rem 0;border-bottom:1px solid {BORDER}40"><div style="width:22px;height:22px;border-radius:50%;flex-shrink:0;background:{ACCENT1}20;border:1px solid {ACCENT1}44;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:800;color:{ACCENT1}">{n}</div><div style="font-size:.82rem;color:{TEXT2}">{s}</div></div>' for n,s in [
+                  (1, "JazzCash app kholo → Send Money"),
                   (2, f"Number dalein: <b style='color:{TEXT1}'>{JAZZCASH_NUMBER}</b>"),
                   (3, f"Amount: <b style='color:{ACCENT1}'>Rs {pro_price_rs:,.0f}</b>"),
                   (4, "Payment karo aur Transaction ID copy karo"),
@@ -2088,25 +2034,18 @@ if st.session_state.data is not None:
             </div>
             """, unsafe_allow_html=True)
 
-            # Proof submission form
             st.markdown(f"""
             <div style="max-width:580px;margin:.75rem auto 0">
               <div style="font-size:.7rem;font-weight:800;text-transform:uppercase;
-                letter-spacing:.1em;color:{TEXT3};margin-bottom:.6rem">
-                ✅ Payment Confirm Karo
-              </div>
+                letter-spacing:.1em;color:{TEXT3};margin-bottom:.6rem">✅ Payment Confirm Karo</div>
             </div>
             """, unsafe_allow_html=True)
 
             jf1, jf2 = st.columns(2)
             with jf1:
-                txn_id = st.text_input("Transaction ID / TID",
-                                       placeholder="e.g. T2501011234567",
-                                       key="jc_txn")
+                txn_id = st.text_input("Transaction ID / TID", placeholder="e.g. T2501011234567", key="jc_txn")
             with jf2:
-                jc_amount = st.text_input("Amount Sent (Rs)",
-                                          placeholder=f"e.g. {pro_price_rs:,.0f}",
-                                          key="jc_amount")
+                jc_amount = st.text_input("Amount Sent (Rs)", placeholder=f"e.g. {pro_price_rs:,.0f}", key="jc_amount")
 
             jc_note = st.text_area("Additional Note (optional)",
                                    placeholder="Koi bhi detail jo add karni ho...",
@@ -2120,12 +2059,10 @@ if st.session_state.data is not None:
 
             jb1, jb2 = st.columns(2)
             with jb1:
-                if st.button("✅ Submit Payment Proof", key="submit_jc",
-                             use_container_width=True):
+                if st.button("✅ Submit Payment Proof", key="submit_jc", use_container_width=True):
                     if not txn_id:
                         st.error("❌ Transaction ID zaroori hai!")
                     else:
-                        # Save screenshot if uploaded
                         screenshot_path = None
                         if screenshot:
                             try:
@@ -2139,7 +2076,6 @@ if st.session_state.data is not None:
                             except Exception as _e:
                                 st.warning(f"⚠️ Could not save screenshot: {_e}")
 
-                        # Save pending payment
                         billing_now = "Yearly" if discount else "Monthly"
                         pending = load_json("dataforge_pending_payments.json")
                         pending[f"{uemail_global}_{now_str()[:10]}"] = {
@@ -2147,7 +2083,7 @@ if st.session_state.data is not None:
                             "email":      uemail_global,
                             "plan":       "pro",
                             "billing":    billing_now,
-                            "amount_usd": 15 if discount else 19,
+                            "amount_usd": pro_price_usd,
                             "amount_rs":  jc_amount or str(pro_price_rs),
                             "txn_id":     txn_id,
                             "note":       jc_note,
@@ -2173,7 +2109,7 @@ if st.session_state.data is not None:
                     st.session_state["show_jazzcash_pro"] = False
                     st.rerun()
 
-        # ── Enterprise contact form (outside columns) ────
+        # ── Enterprise contact form ────────────────────────
         if st.session_state.get("show_contact_enterprise", False):
             st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
             st.markdown(f"""<div class="section-head"><div class="icon-wrap">🏢</div><h3>Contact Enterprise Sales</h3></div>""", unsafe_allow_html=True)
@@ -2225,7 +2161,6 @@ Message:
                     st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
-
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
         # ── Feature Comparison Table ─────────────────────
@@ -2247,8 +2182,8 @@ Message:
             ("SLA Uptime",                  "—",           "99%",          "99.9%"),
         ]
 
-        header_bg  = f"{'rgba(255,255,255,0.04)' if T=='dark' else 'rgba(0,0,0,0.04)'}"
-        row_alt_bg = f"{'rgba(255,255,255,0.02)' if T=='dark' else 'rgba(0,0,0,0.02)'}"
+        header_bg  = "rgba(255,255,255,0.04)" if T=="dark" else "rgba(0,0,0,0.04)"
+        row_alt_bg = "rgba(255,255,255,0.02)" if T=="dark" else "rgba(0,0,0,0.02)"
 
         table_html = f"""
         <div style="border:1px solid {BORDER};border-radius:16px;overflow:hidden;margin-bottom:1rem">
