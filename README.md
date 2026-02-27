@@ -1,6 +1,6 @@
 🌟 Muhammad Shayan's Journey: From Inspiration to Creation 🚀
 
-Hi, my name is Muhammad Shayan, and I am 13 years old. I'm a student in 9th grade, and I am passionate about technology and coding. I am lucky to have the support and motivation from my father, Zubair Anjum (IELTS Teacher), and my mentor, Sir Aammar, who has been a huge inspiration to me. Thanks to their encouragement, I took a big step forward and created my very own app called 'DataForge ML Studio'.
+Hi, my name is Muhammad Shayan, and I am 13 years old. I'm a student in Pre-9th grade, and I am passionate about technology and coding. I am lucky to have the support and motivation from my father, Zubair Anjum (IELTS Teacher), and my mentor, Sir Aammar, who has been a huge inspiration to me. Thanks to their encouragement, I took a big step forward and created my very own app called 'DataForge ML Studio'.
 
 App Function:
 
