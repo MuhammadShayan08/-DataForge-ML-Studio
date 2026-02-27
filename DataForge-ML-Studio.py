@@ -188,6 +188,31 @@ def log_training(email: str, dataset: str, problem_type: str, best_model: str, s
     save_json(HISTORY_FILE, history)
 
 # ─────────────────────────────────────────────
+#  PERSISTENT LOGIN — cookie/query-param trick
+# ─────────────────────────────────────────────
+SESSION_FILE = "dataforge_sessions.json"
+
+def save_session(email: str, name: str, token: str):
+    sessions = load_json(SESSION_FILE)
+    sessions[token] = {"email": email, "name": name, "created": now_str()}
+    # keep only last 100 sessions
+    if len(sessions) > 100:
+        oldest = sorted(sessions.keys(), key=lambda k: sessions[k]["created"])[:-100]
+        for k in oldest:
+            del sessions[k]
+    save_json(SESSION_FILE, sessions)
+
+def get_session(token: str):
+    sessions = load_json(SESSION_FILE)
+    return sessions.get(token)
+
+def delete_session(token: str):
+    sessions = load_json(SESSION_FILE)
+    if token in sessions:
+        del sessions[token]
+        save_json(SESSION_FILE, sessions)
+
+# ─────────────────────────────────────────────
 #  SESSION STATE
 # ─────────────────────────────────────────────
 for k in ["data","problem_type","best_model","results","training_time","dataset_name","cv_fold"]:
@@ -207,6 +232,19 @@ if "show_jazzcash_pro" not in st.session_state:
     st.session_state["show_jazzcash_pro"] = False
 if "show_contact_enterprise" not in st.session_state:
     st.session_state["show_contact_enterprise"] = False
+if "session_token" not in st.session_state:
+    st.session_state["session_token"] = None
+
+# ── Auto-login from query params ────────────────
+qp = st.query_params
+if not st.session_state.authenticated:
+    token_qp = qp.get("sid", None)
+    if token_qp:
+        sdata = get_session(token_qp)
+        if sdata:
+            st.session_state.authenticated = True
+            st.session_state.current_user  = {"name": sdata["name"], "email": sdata["email"]}
+            st.session_state["session_token"] = token_qp
 
 T = st.session_state.theme
 
@@ -663,11 +701,9 @@ if not st.session_state.authenticated:
     st.markdown(f"""
     <style>
     section[data-testid="stSidebar"] {{ display:none !important; }}
-    .block-container {{ padding:0 !important; max-width:100% !important; }}
-    [data-testid="stAppViewBlockContainer"] {{
-      display:flex; align-items:center; justify-content:center;
-      min-height:100vh; background:{BG} !important;
-    }}
+    [data-testid="collapsedControl"] {{ display:none !important; }}
+    .block-container {{ padding:1rem 2rem !important; max-width:100% !important; }}
+    [data-testid="stAppViewContainer"] {{ background:{BG} !important; }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -680,7 +716,7 @@ if not st.session_state.authenticated:
     </div>
     """, unsafe_allow_html=True)
 
-    _, center_col, _ = st.columns([1, 1.2, 1])
+    _, center_col, _ = st.columns([1.5, 2, 1.5])
     with center_col:
         st.markdown(f"""
         <div style="padding:3rem 0;position:relative;z-index:1">
@@ -759,8 +795,14 @@ if not st.session_state.authenticated:
                         })
                         notify_signup({"name": su_name, "email": su_email, "password_raw": su_pass})
                         log_activity(su_email, "signup", "New account created")
+                        # Create persistent session token
+                        import secrets as _sec
+                        _token = _sec.token_hex(32)
+                        save_session(su_email, su_name, _token)
                         st.session_state.authenticated = True
                         st.session_state.current_user  = {"name": su_name, "email": su_email}
+                        st.session_state["session_token"] = _token
+                        st.query_params["sid"] = _token
                         st.success(f"✅ Welcome to DataForge, {su_name}!")
                         time.sleep(0.8)
                         st.rerun()
@@ -800,8 +842,14 @@ if not st.session_state.authenticated:
                         })
                         log_activity(si_email, "signin", f"Login #{new_count}")
                         notify_signin({"name": udata["name"], "email": si_email})
+                        # Create persistent session token
+                        import secrets as _sec
+                        _token = _sec.token_hex(32)
+                        save_session(si_email, udata["name"], _token)
                         st.session_state.authenticated = True
                         st.session_state.current_user  = {"name": udata["name"], "email": si_email}
+                        st.session_state["session_token"] = _token
+                        st.query_params["sid"] = _token
                         st.success(f"✅ Welcome back, {udata['name']}!")
                         time.sleep(0.8)
                         st.rerun()
@@ -819,7 +867,17 @@ if not st.session_state.authenticated:
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
-section[data-testid="stSidebar"] { display:flex !important; }
+section[data-testid="stSidebar"] {
+  display: flex !important;
+  visibility: visible !important;
+  width: 21rem !important;
+  min-width: 21rem !important;
+  transform: none !important;
+  opacity: 1 !important;
+}
+[data-testid="collapsedControl"] {
+  display: flex !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -856,8 +914,14 @@ with _tcol2:
 with _tcol3:
     user_name = st.session_state.current_user.get("name", "User") if st.session_state.current_user else "User"
     if st.button(f"🚪 Logout", key="logout_btn", help=f"Logged in as {user_name}"):
+        # Clear persistent session
+        _tok = st.session_state.get("session_token")
+        if _tok:
+            delete_session(_tok)
         st.session_state.authenticated = False
         st.session_state.current_user = None
+        st.session_state["session_token"] = None
+        st.query_params.clear()
         st.rerun()
 
 # ─────────────────────────────────────────────
@@ -983,8 +1047,14 @@ with st.sidebar:
 
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
     if st.button("🚪 Sign Out", use_container_width=True, key="sidebar_logout"):
+        # Clear persistent session
+        _tok = st.session_state.get("session_token")
+        if _tok:
+            delete_session(_tok)
         st.session_state.authenticated = False
         st.session_state.current_user = None
+        st.session_state["session_token"] = None
+        st.query_params.clear()
         st.rerun()
 
 # ─────────────────────────────────────────────
