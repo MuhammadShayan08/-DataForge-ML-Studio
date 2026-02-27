@@ -16,7 +16,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 warnings.filterwarnings("ignore")
-
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 st.set_page_config(page_title="DataForge ML Studio", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
 
 # ─────────────────────────────────────────────
@@ -131,29 +132,12 @@ PLAN_LIMITS = {
 
 def get_user_plan(email: str) -> str:
     """Returns 'free', 'pro', or 'enterprise'"""
-    # First check Google Sheet for approval
-    approval = check_approval_status(email)
-    if approval["approved"]:
-        # Auto-upgrade user in local DB if approved in sheet
-        users_db = load_json(USERS_FILE)
-        if email in users_db:
-            current_plan = users_db[email].get("plan", "free")
-            if current_plan != approval["plan"]:
-                # Upgrade user automatically
-                users_db[email]["plan"] = approval["plan"]
-                users_db[email]["plan_since"] = now_str()[:10]
-                users_db[email]["plan_expiry"] = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-                users_db[email]["plan_approved_via"] = "google_sheet"
-                users_db[email]["plan_approved_txn"] = approval.get("txn_id", "")
-                save_json(USERS_FILE, users_db)
-        return approval["plan"]
-    
-    # Fallback to local DB
+    # Just use local DB (no Google Sheets)
     users_db = load_json(USERS_FILE)
     user = users_db.get(email, {})
     plan = user.get("plan", "free")
     
-    # Check if pro plan has expired (if expiry date set)
+    # Check if pro plan has expired
     plan_expiry = user.get("plan_expiry", None)
     if plan_expiry and plan != "free":
         try:
@@ -164,8 +148,10 @@ def get_user_plan(email: str) -> str:
                 save_json(USERS_FILE, users_db)
                 return "free"
         except:
-                pass
-        return plan if plan in PLAN_LIMITS else "free"
+            pass
+    
+    return plan if plan in PLAN_LIMITS else "free"
+
 def get_plan_limits(email: str) -> dict:
     plan = get_user_plan(email)
     return PLAN_LIMITS[plan]
@@ -296,24 +282,34 @@ def notify_signin(user: dict):
 # ─────────────────────────────────────────────
 #  GOOGLE SHEETS INTEGRATION
 # ─────────────────────────────────────────────
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-
-# Google Sheets Setup
 GOOGLE_SHEET_NAME = "DataForge Payments"
 GOOGLE_CREDENTIALS_FILE = "dataforge-credentials.json"
 
 def get_sheets_client():
-    """Connect to Google Sheets"""
+    """Connect to Google Sheets using Streamlit Secrets"""
     try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CREDENTIALS_FILE, scope)
-        client = gspread.authorize(creds)
-        return client
+        import json
+        import tempfile
+        
+        # Read from Streamlit secrets
+        if 'gcp_service_account' in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            
+            # Create temporary credentials file
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
+                json.dump(creds_dict, f)
+                temp_creds_file = f.name
+            
+            scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+            creds = ServiceAccountCredentials.from_json_keyfile_name(temp_creds_file, scope)
+            client = gspread.authorize(creds)
+            return client
+        else:
+            print("No gcp_service_account found in secrets")
+            return None
     except Exception as e:
-        st.error(f"❌ Google Sheets connection failed: {e}")
+        print(f"Sheet connection failed: {e}")
         return None
-
 def add_payment_to_sheet(payment_data):
     """Add payment submission to Google Sheet"""
     try:
@@ -336,7 +332,7 @@ def add_payment_to_sheet(payment_data):
             payment_data.get("note", ""),
             payment_data.get("screenshot", ""),
             payment_data.get("status", "pending"),
-            "NO"  # Approved column - default NO
+            "NO"  # Approved column
         ]
         
         sheet.append_row(row)
@@ -356,7 +352,7 @@ def check_approval_status(email: str) -> dict:
         all_records = sheet.get_all_records()
         
         # Find user's latest approved payment
-        for record in reversed(all_records):  # Check from latest
+        for record in reversed(all_records):
             if record.get("Email", "").lower() == email.lower():
                 if str(record.get("Approved", "")).upper() == "YES":
                     return {
@@ -367,9 +363,12 @@ def check_approval_status(email: str) -> dict:
                     }
         
         return {"approved": False, "plan": "free"}
+    
     except Exception as e:
         print(f"Sheet check error: {e}")
         return {"approved": False, "plan": "free"}
+        
+
 
 # ─────────────────────────────────────────────
 #  USER HISTORY HELPERS
