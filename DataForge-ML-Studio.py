@@ -1256,85 +1256,122 @@ if st.session_state.data is not None:
                         st.session_state.training_time = None
                         st.rerun()
 
-            if train_clicked:
-                steps = [
-                    ("Data Preprocessing",   "Handling nulls, encoding categoricals…"),
-                    ("Feature Engineering",  "Scaling, transformations, pipeline setup…"),
-                    ("Model Comparison",     f"Running algorithms with {fold}-fold cross-validation…"),
-                    ("Best Model Selection", "Picking winner by metric score…"),
-                    ("Saving Artifact",      "Serializing model to best_model.pkl…"),
-                ]
-                placeholder = st.empty()
+if train_clicked:
+    steps = [
+        ("Data Preprocessing",   "Handling nulls, encoding categoricals…"),
+        ("Feature Engineering",  "Scaling, transformations, pipeline setup…"),
+        ("Model Comparison",     f"Running algorithms with {fold}-fold cross-validation…"),
+        ("Best Model Selection", "Picking winner by metric score…"),
+        ("Saving Artifact",      "Serializing model to best_model.pkl…"),
+    ]
+    placeholder = st.empty()
 
-                def render_steps(done):
-                    html = '<div class="step-timeline">'
-                    for i, (lbl, sub) in enumerate(steps):
-                        cls = "done" if i < done else ("active" if i == done else "")
-                        icon_s = "✓" if i < done else ("◉" if i == done else str(i+1))
-                        html += f"""<div class="step-item {cls}"><div class="step-dot {cls}">{icon_s}</div><div><div class="step-label">{lbl}</div><div class="step-sub">{sub}</div></div></div>"""
-                    return html + "</div>"
+    def render_steps(done):
+        html = '<div class="step-timeline">'
+        for i, (lbl, sub) in enumerate(steps):
+            cls = "done" if i < done else ("active" if i == done else "")
+            icon_s = "✓" if i < done else ("◉" if i == done else str(i+1))
+            html += f"""<div class="step-item {cls}"><div class="step-dot {cls}">{icon_s}</div><div><div class="step-label">{lbl}</div><div class="step-sub">{sub}</div></div></div>"""
+        return html + "</div>"
 
-                try:
-                    t0 = time.time()
-                    for si in range(len(steps)):
-                        placeholder.markdown(render_steps(si), unsafe_allow_html=True)
-                        if si == 2:
-                            kw_setup = dict(
-                                data=df, target=target_col,
-                                train_size=float(train_size),
-                                fold=int(fold),
-                                normalize=normalize,
-                                session_id=42,
-                                verbose=False
-                            )
-                            if remove_out:
-                                kw_setup["remove_outliers"] = True
+    try:
+        t0 = time.time()
+        for si in range(len(steps)):
+            placeholder.markdown(render_steps(si), unsafe_allow_html=True)
+            
+            if si == 2:
+                # ✅ FIXED: PyCaret setup
+                kw_setup = dict(
+                    data=df, 
+                    target=target_col,
+                    train_size=float(train_size),
+                    fold=int(fold),
+                    normalize=normalize,
+                    verbose=False,
+                    html=False,  # Disable HTML output
+                    session_id=123  # Fixed seed
+                )
+                
+                # Only remove outliers for regression with enough data
+                if remove_out and ptype == "regression" and len(df) > 100:
+                    kw_setup["remove_outliers"] = True
 
-                            kw_compare = dict(verbose=False, n_select=1, budget_time=5.0)
-                            if not has_advanced:
-                                kw_compare["exclude"] = ["xgboost","lightgbm","catboost","gbc","gbr","et","ada"]
+                # ✅ FIXED: Compare models settings
+                kw_compare = dict(
+                    verbose=False, 
+                    n_select=1,
+                    sort='Accuracy' if ptype == "classification" else 'R2'
+                )
+                
+                # Exclude advanced models on free plan
+                if not has_advanced:
+                    if ptype == "classification":
+                        kw_compare["exclude"] = ['xgboost', 'lightgbm', 'catboost']
+                    else:
+                        kw_compare["exclude"] = ['xgboost', 'lightgbm', 'catboost']
 
-                            if ptype == "classification":
-                                clf_setup(**kw_setup)
-                                best_result = clf_compare(**kw_compare)
-                                best = best_result[0] if isinstance(best_result, list) else best_result
-                                results = clf_pull()
-                                clf_save(best, "best_model")
-                            else:
-                                reg_setup(**kw_setup)
-                                best_result = reg_compare(**kw_compare)
-                                best = best_result[0] if isinstance(best_result, list) else best_result
-                                results = reg_pull()
-                                reg_save(best, "best_model")
+                # ✅ Run PyCaret
+                if ptype == "classification":
+                    clf_setup(**kw_setup)
+                    best = clf_compare(**kw_compare)
+                    results = clf_pull()
+                    clf_save(best, "best_model")
+                else:
+                    reg_setup(**kw_setup)
+                    best = reg_compare(**kw_compare)
+                    results = reg_pull()
+                    reg_save(best, "best_model")
 
-                            st.session_state.best_model = best
-                            st.session_state.results = results
-                        time.sleep(0.3)
-                    placeholder.markdown(render_steps(len(steps)), unsafe_allow_html=True)
-                    elapsed = time.time() - t0
-                    st.session_state.training_time = elapsed
+                st.session_state.best_model = best
+                st.session_state.results = results
+                
+            time.sleep(0.3)
+            
+        placeholder.markdown(render_steps(len(steps)), unsafe_allow_html=True)
+        elapsed = time.time() - t0
+        st.session_state.training_time = elapsed
 
-                    if uemail_global:
-                        try:
-                            res_log = st.session_state.results
-                            mc_log = "Model" if "Model" in res_log.columns else res_log.columns[0]
-                            nr_log = res_log.select_dtypes(include=[np.number]).columns
-                            bm_name = str(res_log.iloc[0][mc_log])
-                            bm_score = float(res_log.iloc[0][nr_log[0]]) if len(nr_log) else 0.0
-                            log_training(email=uemail_global, dataset=str(st.session_state.dataset_name or "Uploaded CSV"),
-                                         problem_type=str(ptype), best_model=bm_name, score=bm_score, rows=len(df), cols=len(df.columns))
-                            log_activity(uemail_global, "training_complete", f"{bm_name} | score={bm_score:.4f} | {len(df)} rows")
-                        except Exception:
-                            pass
+        # Log training
+        if uemail_global:
+            try:
+                res_log = st.session_state.results
+                mc_log = res_log.columns[0]
+                nr_log = res_log.select_dtypes(include=[np.number]).columns
+                bm_name = str(res_log.iloc[0][mc_log])
+                bm_score = float(res_log.iloc[0][nr_log[0]]) if len(nr_log) else 0.0
+                log_training(
+                    email=uemail_global, 
+                    dataset=str(st.session_state.dataset_name or "Uploaded CSV"),
+                    problem_type=str(ptype), 
+                    best_model=bm_name, 
+                    score=bm_score, 
+                    rows=len(df), 
+                    cols=len(df.columns)
+                )
+                log_activity(uemail_global, "training_complete", f"{bm_name} | score={bm_score:.4f}")
+            except Exception as e:
+                st.warning(f"Could not log training: {e}")
 
-                    st.success(f"✅ Training complete in **{fmt_time(elapsed)}**! Head to the 🏆 Results tab.")
-                    if not has_advanced:
-                        st.info("💡 Upgrade to Pro for XGBoost, LightGBM, and CatBoost!")
-                    st.balloons()
-                except Exception as e:
-                    placeholder.empty()
-                    st.error(f"❌ Training failed: {e}")
-                    st.info("💡 Ensure the target column is correct and dataset has enough rows.")
+        st.success(f"✅ Training complete in **{fmt_time(elapsed)}**! Head to the 🏆 Results tab.")
+        if not has_advanced:
+            st.info("💡 Upgrade to Pro for XGBoost, LightGBM, and CatBoost!")
+        st.balloons()
+        
+    except Exception as e:
+        placeholder.empty()
+        st.error(f"❌ Training failed: {str(e)}")
+        st.info("💡 Try with a different target column or check your data for issues.")
+        
+        # Debug info
+        with st.expander("🔍 Debug Information"):
+            st.write("**Error Details:**")
+            st.code(str(e))
+            st.write("**Dataset Info:**")
+            st.write(f"- Rows: {len(df)}")
+            st.write(f"- Columns: {len(df.columns)}")
+            st.write(f"- Target: {target_col}")
+            st.write(f"- Problem Type: {ptype}")
+            st.write(f"- Null values: {df.isnull().sum().sum()}")
     # ═══════════════════════════
     # TAB 4 — RESULTS
     # ═══════════════════════════
