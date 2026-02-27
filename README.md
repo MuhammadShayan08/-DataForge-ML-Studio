@@ -1,6 +1,6 @@
 🌟 Muhammad Shayan's Journey: From Inspiration to Creation 🚀
 
-Hi, my name is Muhammad Shayan, and I am 13 years old. I'm a student in Pre-9th grade, and I am passionate about technology and coding. I am lucky to have the support and motivation from my father, Zubair Anjum (IELTS Teacher), and my mentor, Sir Aammar, who has been a huge inspiration to me. Thanks to their encouragement, I took a big step forward and created my very own app called 'DataForge ML Studio'.
+Hi, my name is Muhammad Shayan, and I am 13 years old. I'm a student in Pre-9th grade, and I am passionate about technology and coding. I am lucky to have the support and motivation from my father, Zubair Anjum (IELTS Teacher), and my honorable mentor Sir Muhammad Aammar Tufail (PhD. Data Scientist), who have been a huge inspiration to me. Thanks to their encouragement, I took a big step forward and created my very own app named 'DataForge ML Studio'.
 
 App Function:
 
@@ -8,7 +8,7 @@ DataForge ML Studio is an app designed to make Machine Learning and data-related
 
 App Process:
 
-I worked hard on the app, dedicating 1 hour daily, but sometimes I even went 9 hours straight without stopping! Then my father, Baba, told me to rest 💤, so I took a break and played badminton 🏸 for 2 hours to refresh myself. I’m the champion of badminton, and I love beating the "barons" of the game.
+I worked hard on the app, dedicating 1 hour daily, but sometimes I even went 9 hours straight without stopping! Then my Baba, asked me to take a break, so I took a break and played badminton 🏸 for 2 hours to refresh myself. I’m the champion of badminton, and I love beating the "Elders" of the game.
 
 I wake up at 9:00 AM and sleep at 11:00 PM 🌙, keeping a good routine to stay productive.
 
