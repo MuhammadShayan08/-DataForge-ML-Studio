@@ -1041,9 +1041,9 @@ if st.session_state.data is not None:
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = df.select_dtypes(include=["object","category"]).columns.tolist()
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊  Data Explorer", "🧬  EDA & Insights", "⚙️  Train Model",
-        "🏆  Results", "📜  My History", "👑  Upgrade",
+        "🏆  Results", "📜  My History"
     ])
 
     # ═══════════════════════════
