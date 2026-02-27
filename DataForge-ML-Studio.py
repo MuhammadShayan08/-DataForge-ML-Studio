@@ -1075,7 +1075,7 @@ if st.session_state.data is not None:
                                 "Non-Null":df.count().values,
                                 "Null %":((df.isnull().sum()/len(df))*100).round(1).astype(str)+"%",
                                 "Unique":df.nunique().values})
-            ci_display = ci.astype(str)  # Convert all to string
+            ci_display = ci.astype(str)
             st.dataframe(ci_display, width="stretch", height=300)
         with c2:
             st.markdown(f"""<div class="section-head"><div class="icon-wrap">📊</div><h3>Statistical Summary</h3></div>""", unsafe_allow_html=True)
@@ -1178,7 +1178,8 @@ if st.session_state.data is not None:
                     st.plotly_chart(fig_miss, width="stretch")
                 else:
                     st.success("✅ No missing values found in this dataset!")
-# ═══════════════════════════
+
+    # ═══════════════════════════
     # TAB 3 — TRAIN MODEL
     # ═══════════════════════════
     with tab3:
@@ -1247,131 +1248,128 @@ if st.session_state.data is not None:
 
             col_btn1, col_btn2 = st.columns([3, 1])
             with col_btn1:
-                train_clicked = st.button("🚀 Launch Training", width="stretch")
+                train_clicked = st.button("🚀 Launch Training", width="stretch", key="train_btn")
             with col_btn2:
                 if st.session_state.results is not None:
-                    if st.button("🔄 Reset Results", width="stretch"):
+                    if st.button("🔄 Reset Results", width="stretch", key="reset_btn"):
                         st.session_state.results = None
                         st.session_state.best_model = None
                         st.session_state.training_time = None
                         st.rerun()
 
-if train_clicked:
-    steps = [
-        ("Data Preprocessing",   "Handling nulls, encoding categoricals…"),
-        ("Feature Engineering",  "Scaling, transformations, pipeline setup…"),
-        ("Model Comparison",     f"Running algorithms with {fold}-fold cross-validation…"),
-        ("Best Model Selection", "Picking winner by metric score…"),
-        ("Saving Artifact",      "Serializing model to best_model.pkl…"),
-    ]
-    placeholder = st.empty()
+            if train_clicked:
+                steps = [
+                    ("Data Preprocessing",   "Handling nulls, encoding categoricals…"),
+                    ("Feature Engineering",  "Scaling, transformations, pipeline setup…"),
+                    ("Model Comparison",     f"Running algorithms with {fold}-fold cross-validation…"),
+                    ("Best Model Selection", "Picking winner by metric score…"),
+                    ("Saving Artifact",      "Serializing model to best_model.pkl…"),
+                ]
+                placeholder = st.empty()
 
-    def render_steps(done):
-        html = '<div class="step-timeline">'
-        for i, (lbl, sub) in enumerate(steps):
-            cls = "done" if i < done else ("active" if i == done else "")
-            icon_s = "✓" if i < done else ("◉" if i == done else str(i+1))
-            html += f"""<div class="step-item {cls}"><div class="step-dot {cls}">{icon_s}</div><div><div class="step-label">{lbl}</div><div class="step-sub">{sub}</div></div></div>"""
-        return html + "</div>"
+                def render_steps(done):
+                    html = '<div class="step-timeline">'
+                    for i, (lbl, sub) in enumerate(steps):
+                        cls = "done" if i < done else ("active" if i == done else "")
+                        icon_s = "✓" if i < done else ("◉" if i == done else str(i+1))
+                        html += f"""<div class="step-item {cls}"><div class="step-dot {cls}">{icon_s}</div><div><div class="step-label">{lbl}</div><div class="step-sub">{sub}</div></div></div>"""
+                    return html + "</div>"
 
-    try:
-        t0 = time.time()
-        for si in range(len(steps)):
-            placeholder.markdown(render_steps(si), unsafe_allow_html=True)
-            
-            if si == 2:
-                # ✅ FIXED: PyCaret setup
-                kw_setup = dict(
-                    data=df, 
-                    target=target_col,
-                    train_size=float(train_size),
-                    fold=int(fold),
-                    normalize=normalize,
-                    verbose=False,
-                    html=False,  # Disable HTML output
-                    session_id=123  # Fixed seed
-                )
-                
-                # Only remove outliers for regression with enough data
-                if remove_out and ptype == "regression" and len(df) > 100:
-                    kw_setup["remove_outliers"] = True
+                training_error = None
+                try:
+                    t0 = time.time()
+                    for si in range(len(steps)):
+                        placeholder.markdown(render_steps(si), unsafe_allow_html=True)
 
-                # ✅ FIXED: Compare models settings
-                kw_compare = dict(
-                    verbose=False, 
-                    n_select=1,
-                    sort='Accuracy' if ptype == "classification" else 'R2'
-                )
-                
-                # Exclude advanced models on free plan
-                if not has_advanced:
-                    if ptype == "classification":
-                        kw_compare["exclude"] = ['xgboost', 'lightgbm', 'catboost']
-                    else:
-                        kw_compare["exclude"] = ['xgboost', 'lightgbm', 'catboost']
+                        if si == 2:
+                            # PyCaret setup
+                            kw_setup = dict(
+                                data=df,
+                                target=target_col,
+                                train_size=float(train_size),
+                                fold=int(fold),
+                                normalize=normalize,
+                                verbose=False,
+                                html=False,
+                                session_id=123
+                            )
 
-                # ✅ Run PyCaret
-                if ptype == "classification":
-                    clf_setup(**kw_setup)
-                    best = clf_compare(**kw_compare)
-                    results = clf_pull()
-                    clf_save(best, "best_model")
-                else:
-                    reg_setup(**kw_setup)
-                    best = reg_compare(**kw_compare)
-                    results = reg_pull()
-                    reg_save(best, "best_model")
+                            # Only remove outliers for regression with enough data
+                            if remove_out and ptype == "regression" and len(df) > 100:
+                                kw_setup["remove_outliers"] = True
 
-                st.session_state.best_model = best
-                st.session_state.results = results
-                
-            time.sleep(0.3)
-            
-        placeholder.markdown(render_steps(len(steps)), unsafe_allow_html=True)
-        elapsed = time.time() - t0
-        st.session_state.training_time = elapsed
+                            # Compare models settings
+                            kw_compare = dict(verbose=False, n_select=1)
 
-        # Log training
-        if uemail_global:
-            try:
-                res_log = st.session_state.results
-                mc_log = res_log.columns[0]
-                nr_log = res_log.select_dtypes(include=[np.number]).columns
-                bm_name = str(res_log.iloc[0][mc_log])
-                bm_score = float(res_log.iloc[0][nr_log[0]]) if len(nr_log) else 0.0
-                log_training(
-                    email=uemail_global, 
-                    dataset=str(st.session_state.dataset_name or "Uploaded CSV"),
-                    problem_type=str(ptype), 
-                    best_model=bm_name, 
-                    score=bm_score, 
-                    rows=len(df), 
-                    cols=len(df.columns)
-                )
-                log_activity(uemail_global, "training_complete", f"{bm_name} | score={bm_score:.4f}")
-            except Exception as e:
-                st.warning(f"Could not log training: {e}")
+                            # Exclude advanced models on free plan
+                            if not has_advanced:
+                                kw_compare["exclude"] = ['xgboost', 'lightgbm', 'catboost']
 
-        st.success(f"✅ Training complete in **{fmt_time(elapsed)}**! Head to the 🏆 Results tab.")
-        if not has_advanced:
-            st.info("💡 Upgrade to Pro for XGBoost, LightGBM, and CatBoost!")
-        st.balloons()
-        
-    except Exception as e:
-        placeholder.empty()
-        st.error(f"❌ Training failed: {str(e)}")
-        st.info("💡 Try with a different target column or check your data for issues.")
-        
-        # Debug info
-        with st.expander("🔍 Debug Information"):
-            st.write("**Error Details:**")
-            st.code(str(e))
-            st.write("**Dataset Info:**")
-            st.write(f"- Rows: {len(df)}")
-            st.write(f"- Columns: {len(df.columns)}")
-            st.write(f"- Target: {target_col}")
-            st.write(f"- Problem Type: {ptype}")
-            st.write(f"- Null values: {df.isnull().sum().sum()}")
+                            # Run PyCaret
+                            if ptype == "classification":
+                                clf_setup(**kw_setup)
+                                best = clf_compare(**kw_compare)
+                                results = clf_pull()
+                                clf_save(best, "best_model")
+                            else:
+                                reg_setup(**kw_setup)
+                                best = reg_compare(**kw_compare)
+                                results = reg_pull()
+                                reg_save(best, "best_model")
+
+                            st.session_state.best_model = best
+                            st.session_state.results = results
+
+                        time.sleep(0.3)
+
+                    placeholder.markdown(render_steps(len(steps)), unsafe_allow_html=True)
+                    elapsed = time.time() - t0
+                    st.session_state.training_time = elapsed
+
+                    # Log training
+                    if uemail_global:
+                        try:
+                            res_log = st.session_state.results
+                            mc_log = res_log.columns[0]
+                            nr_log = res_log.select_dtypes(include=[np.number]).columns
+                            bm_name = str(res_log.iloc[0][mc_log])
+                            bm_score = float(res_log.iloc[0][nr_log[0]]) if len(nr_log) else 0.0
+                            log_training(
+                                email=uemail_global,
+                                dataset=str(st.session_state.dataset_name or "Uploaded CSV"),
+                                problem_type=str(ptype),
+                                best_model=bm_name,
+                                score=bm_score,
+                                rows=len(df),
+                                cols=len(df.columns)
+                            )
+                            log_activity(uemail_global, "training_complete", f"{bm_name} | {bm_score:.4f}")
+                        except Exception:
+                            pass
+
+                    st.success(f"✅ Training complete in **{fmt_time(elapsed)}**! Head to the 🏆 Results tab.")
+                    if not has_advanced:
+                        st.info("💡 Upgrade to Pro for XGBoost, LightGBM, and CatBoost!")
+                    st.balloons()
+
+                except Exception as e:
+                    training_error = e
+                    placeholder.empty()
+                    st.error(f"❌ Training failed: {str(e)}")
+                    st.info("💡 Try with a different target column or check your data.")
+
+                # Debug info shown after training attempt
+                if training_error is not None:
+                    with st.expander("🔍 Debug Information"):
+                        st.write("**Error Details:**")
+                        st.code(str(training_error))
+                        st.write("**Dataset Info:**")
+                        st.write(f"- Rows: {len(df)}")
+                        st.write(f"- Columns: {len(df.columns)}")
+                        st.write(f"- Target: {target_col}")
+                        st.write(f"- Problem Type: {ptype}")
+                        st.write(f"- Null values: {df.isnull().sum().sum()}")
+
     # ═══════════════════════════
     # TAB 4 — RESULTS
     # ═══════════════════════════
@@ -1485,7 +1483,6 @@ if train_clicked:
     with tab5:
         uhist_h = get_user_history(uemail_global)
         history_limit = plan_limits["history_entries"]
-
 
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
