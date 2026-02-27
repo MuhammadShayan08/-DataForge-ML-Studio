@@ -25,7 +25,7 @@ st.set_page_config(page_title="DataForge ML Studio", page_icon="⚡", layout="wi
 # ─────────────────────────────────────────────
 USERS_FILE   = "dataforge_users.json"
 HISTORY_FILE = "dataforge_history.json"
-TOKENS_FILE  = "dataforge_tokens.json"   # persists login across refreshes
+TOKENS_FILE  = "dataforge_tokens.json"
 
 def load_json(path):
     if os.path.exists(path):
@@ -42,18 +42,14 @@ def save_json(path, data):
 
 # ─────────────────────────────────────────────
 #  PERSISTENT LOGIN — TOKEN SYSTEM
-#  Token stored in browser via st.query_params,
-#  validated against tokens file on every load.
 # ─────────────────────────────────────────────
 TOKEN_EXPIRY_DAYS = 30
 
 def create_token(email: str) -> str:
-    """Generate a secure random token, save it with expiry."""
     token = secrets.token_urlsafe(32)
     tokens = load_json(TOKENS_FILE)
     expiry = (datetime.now() + timedelta(days=TOKEN_EXPIRY_DAYS)).strftime("%Y-%m-%d")
     tokens[token] = {"email": email, "expiry": expiry}
-    # Clean expired tokens while we're here
     today = datetime.now().strftime("%Y-%m-%d")
     tokens = {t: v for t, v in tokens.items() if v.get("expiry", "9999") >= today}
     tokens[token] = {"email": email, "expiry": expiry}
@@ -61,7 +57,6 @@ def create_token(email: str) -> str:
     return token
 
 def validate_token(token: str):
-    """Returns email if token is valid and not expired, else None."""
     if not token:
         return None
     tokens = load_json(TOKENS_FILE)
@@ -70,14 +65,12 @@ def validate_token(token: str):
         return None
     today = datetime.now().strftime("%Y-%m-%d")
     if entry.get("expiry", "0000") < today:
-        # Expired — remove it
         tokens.pop(token, None)
         save_json(TOKENS_FILE, tokens)
         return None
     return entry.get("email")
 
 def delete_token(token: str):
-    """Remove token on logout."""
     tokens = load_json(TOKENS_FILE)
     tokens.pop(token, None)
     save_json(TOKENS_FILE, tokens)
@@ -87,102 +80,6 @@ def hash_password(pw):
 
 def now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-# ─────────────────────────────────────────────
-#  PLAN LIMITS — SINGLE SOURCE OF TRUTH
-# ─────────────────────────────────────────────
-PLAN_LIMITS = {
-    "free": {
-        "datasets_per_month": 3,
-        "max_algorithms":     5,
-        "cv_folds_max":       3,
-        "history_entries":    3,
-        "advanced_models":    False,
-        "export_model":       False,
-        "full_history":       False,
-        "priority_queue":     False,
-        "api_access":         False,
-        "team_members":       1,
-    },
-    "pro": {
-        "datasets_per_month": 999999,
-        "max_algorithms":     15,
-        "cv_folds_max":       10,
-        "history_entries":    50,
-        "advanced_models":    True,
-        "export_model":       True,
-        "full_history":       True,
-        "priority_queue":     True,
-        "api_access":         False,
-        "team_members":       1,
-    },
-    "enterprise": {
-        "datasets_per_month": 999999,
-        "max_algorithms":     15,
-        "cv_folds_max":       10,
-        "history_entries":    999999,
-        "advanced_models":    True,
-        "export_model":       True,
-        "full_history":       True,
-        "priority_queue":     True,
-        "api_access":         True,
-        "team_members":       999999,
-    },
-}
-
-def get_user_plan(email: str) -> str:
-    """Returns 'free', 'pro', or 'enterprise'"""
-    users_db = load_json(USERS_FILE)
-    user = users_db.get(email, {})
-    plan = user.get("plan", "free")
-    # Check if pro plan has expired (if expiry date set)
-    plan_expiry = user.get("plan_expiry", None)
-    if plan_expiry and plan != "free":
-        try:
-            expiry_dt = datetime.strptime(plan_expiry, "%Y-%m-%d")
-            if datetime.now() > expiry_dt:
-                # Downgrade to free
-                users_db[email]["plan"] = "free"
-                users_db[email]["plan_expired"] = True
-                save_json(USERS_FILE, users_db)
-                return "free"
-        except:
-            pass
-    return plan if plan in PLAN_LIMITS else "free"
-
-def get_plan_limits(email: str) -> dict:
-    plan = get_user_plan(email)
-    return PLAN_LIMITS[plan]
-
-def get_datasets_used_this_month(email: str) -> int:
-    """Count datasets trained this calendar month"""
-    history = load_json(HISTORY_FILE)
-    training_log = history.get(email, {}).get("training_log", [])
-    this_month = datetime.now().strftime("%Y-%m")
-    count = sum(1 for t in training_log if t.get("time", "")[:7] == this_month)
-    return count
-
-def can_train(email: str) -> tuple[bool, str]:
-    """Returns (can_train, reason_if_not)"""
-    plan = get_user_plan(email)
-    limits = PLAN_LIMITS[plan]
-    used = get_datasets_used_this_month(email)
-    max_ds = limits["datasets_per_month"]
-    if used >= max_ds:
-        return False, f"You've used {used}/{max_ds} datasets this month on the **{plan.upper()}** plan. Upgrade to train more!"
-    return True, ""
-
-def upgrade_user_plan(email: str, plan: str, months: int = 1):
-    """Set user plan with expiry"""
-    users_db = load_json(USERS_FILE)
-    if email not in users_db:
-        return
-    expiry = (datetime.now() + timedelta(days=30 * months)).strftime("%Y-%m-%d")
-    users_db[email]["plan"] = plan
-    users_db[email]["plan_since"] = now_str()[:10]
-    users_db[email]["plan_expiry"] = expiry
-    users_db[email]["plan_expired"] = False
-    save_json(USERS_FILE, users_db)
 
 # ─────────────────────────────────────────────
 #  EMAIL NOTIFICATION
@@ -245,7 +142,6 @@ def notify_signin(user: dict):
  Name       : {user['name']}
  Email      : {user['email']}
  Login #    : {login_count + 1}
- Total Logins     : {login_count + 1}
  Datasets Trained : {u_hist.get('datasets_trained', 0)}
  Last Seen        : {u_hist.get('last_login', 'First time')}
 ══════════════════════════════════════════"""
@@ -292,7 +188,7 @@ def log_training(email: str, dataset: str, problem_type: str, best_model: str, s
         "best_model": best_model, "score": round(float(score), 4), "rows": rows, "cols": cols
     })
     history[email]["datasets_trained"] = history[email].get("datasets_trained", 0) + 1
-    history[email]["training_log"] = history[email]["training_log"][-50:]
+    history[email]["training_log"] = history[email]["training_log"][-200:]
     save_json(HISTORY_FILE, history)
 
 # ─────────────────────────────────────────────
@@ -306,13 +202,11 @@ if "theme" not in st.session_state:
 if "auth_mode" not in st.session_state:
     st.session_state.auth_mode = "signin"
 
-# ── Auto-login: check token in query params ──────────────────────
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.current_user  = None
     st.session_state.login_token   = None
 
-    # Try to restore session from ?token=... in URL
     try:
         qp = st.query_params
         saved_token = qp.get("token", None)
@@ -326,7 +220,7 @@ if "authenticated" not in st.session_state:
                     st.session_state.current_user  = {"name": udata["name"], "email": email}
                     st.session_state.login_token   = saved_token
     except Exception:
-        pass  # query_params unavailable or malformed — stay logged out
+        pass
 
 T = st.session_state.theme
 
@@ -379,55 +273,14 @@ section[data-testid="stSidebar"]>div{{background:{"transparent" if T=="dark" els
 section[data-testid="stSidebar"] *{{color:{"#d1fae5" if T=="dark" else "#111111"} !important;}}
 section[data-testid="stSidebar"] h1,section[data-testid="stSidebar"] h2,section[data-testid="stSidebar"] h3{{color:{"#f9fafb" if T=="dark" else "#111111"} !important;}}
 section[data-testid="stSidebar"] .stButton>button{{background:{"linear-gradient(135deg,#16a34a,#22c55e)" if T=="dark" else "linear-gradient(135deg,#5b21b6,#7c3aed)"} !important;color:#ffffff !important;box-shadow:{"0 4px 14px rgba(74,222,128,0.35)" if T=="dark" else "0 4px 14px rgba(124,58,237,0.35)"} !important;}}
-
-/* ── FILE UPLOADER — DARK THEME FIX ── */
-[data-testid="stFileUploader"] {{
-  background:{"#0f0f0f" if T=="dark" else "#f3eeff"} !important;
-  border-radius:14px !important;
-  padding:4px !important;
-}}
-[data-testid="stFileUploader"] > div {{
-  background:{"#111111" if T=="dark" else "#ede9fe"} !important;
-  border:2px dashed {"rgba(74,222,128,0.35)" if T=="dark" else "rgba(124,58,237,0.40)"} !important;
-  border-radius:12px !important;
-}}
-[data-testid="stFileUploader"] > div:hover {{
-  border-color:{"rgba(74,222,128,0.70)" if T=="dark" else "rgba(124,58,237,0.70)"} !important;
-  background:{"#161616" if T=="dark" else "#e8e0ff"} !important;
-}}
-[data-testid="stFileUploader"] label, 
-[data-testid="stFileUploader"] span,
-[data-testid="stFileUploader"] p {{
-  color:{"#6b7280" if T=="dark" else "#7c3aed"} !important;
-  background:transparent !important;
-}}
-[data-testid="stFileUploader"] small {{
-  color:{"#4b5563" if T=="dark" else "#9ca3af"} !important;
-}}
-[data-testid="stFileUploaderDropzone"] {{
-  background:{"#0f0f0f" if T=="dark" else "#ede9fe"} !important;
-  border:2px dashed {"rgba(74,222,128,0.35)" if T=="dark" else "rgba(124,58,237,0.40)"} !important;
-  border-radius:12px !important;
-}}
-[data-testid="stFileUploaderDropzone"]:hover {{
-  background:{"#141414" if T=="dark" else "#e0d9ff"} !important;
-  border-color:{"rgba(74,222,128,0.65)" if T=="dark" else "rgba(124,58,237,0.65)"} !important;
-}}
-[data-testid="stFileUploaderDropzone"] * {{
-  color:{"#6b7280" if T=="dark" else "#7c3aed"} !important;
-  background:transparent !important;
-}}
-[data-testid="stFileUploaderDropzone"] button {{
-  background:{"#1a1a1a" if T=="dark" else "rgba(124,58,237,0.10)"} !important;
-  border:1px solid {"rgba(74,222,128,0.35)" if T=="dark" else "rgba(124,58,237,0.45)"} !important;
-  color:{"#4ade80" if T=="dark" else "#5b21b6"} !important;
-  border-radius:8px !important;
-  font-weight:600 !important;
-}}
-[data-testid="stFileUploaderDropzone"] button:hover {{
-  background:{"rgba(74,222,128,0.10)" if T=="dark" else "rgba(124,58,237,0.18)"} !important;
-  border-color:{"rgba(74,222,128,0.60)" if T=="dark" else "rgba(124,58,237,0.70)"} !important;
-}}
+[data-testid="stFileUploader"] {{background:{"#0f0f0f" if T=="dark" else "#f3eeff"} !important;border-radius:14px !important;padding:4px !important;}}
+[data-testid="stFileUploader"] > div {{background:{"#111111" if T=="dark" else "#ede9fe"} !important;border:2px dashed {"rgba(74,222,128,0.35)" if T=="dark" else "rgba(124,58,237,0.40)"} !important;border-radius:12px !important;}}
+[data-testid="stFileUploader"] > div:hover {{border-color:{"rgba(74,222,128,0.70)" if T=="dark" else "rgba(124,58,237,0.70)"} !important;background:{"#161616" if T=="dark" else "#e8e0ff"} !important;}}
+[data-testid="stFileUploader"] label,[data-testid="stFileUploader"] span,[data-testid="stFileUploader"] p {{color:{"#6b7280" if T=="dark" else "#7c3aed"} !important;background:transparent !important;}}
+[data-testid="stFileUploaderDropzone"] {{background:{"#0f0f0f" if T=="dark" else "#ede9fe"} !important;border:2px dashed {"rgba(74,222,128,0.35)" if T=="dark" else "rgba(124,58,237,0.40)"} !important;border-radius:12px !important;}}
+[data-testid="stFileUploaderDropzone"]:hover {{background:{"#141414" if T=="dark" else "#e0d9ff"} !important;border-color:{"rgba(74,222,128,0.65)" if T=="dark" else "rgba(124,58,237,0.65)"} !important;}}
+[data-testid="stFileUploaderDropzone"] * {{color:{"#6b7280" if T=="dark" else "#7c3aed"} !important;background:transparent !important;}}
+[data-testid="stFileUploaderDropzone"] button {{background:{"#1a1a1a" if T=="dark" else "rgba(124,58,237,0.10)"} !important;border:1px solid {"rgba(74,222,128,0.35)" if T=="dark" else "rgba(124,58,237,0.45)"} !important;color:{"#4ade80" if T=="dark" else "#5b21b6"} !important;border-radius:8px !important;font-weight:600 !important;}}
 .vibe-header{{position:relative;padding:2.5rem 3rem;border-radius:20px;margin-bottom:2rem;overflow:hidden;background:{HDR_BG};border:1px solid {HDR_BORDER};box-shadow:{"0 0 40px rgba(74,222,128,0.12)" if T=="dark" else "0 8px 40px rgba(124,58,237,0.30)"}}}
 .vibe-header::before{{content:'';position:absolute;inset:0;background:{"radial-gradient(ellipse 80% 60% at 10% 50%,rgba(74,222,128,0.15) 0%,transparent 60%),radial-gradient(ellipse 60% 80% at 90% 30%,rgba(96,165,250,0.10) 0%,transparent 60%)" if T=="dark" else "radial-gradient(ellipse 80% 60% at 10% 50%,rgba(167,139,250,0.25) 0%,transparent 60%),radial-gradient(ellipse 60% 80% at 90% 30%,rgba(196,181,253,0.20) 0%,transparent 60%)"};animation:pulseGlow 6s ease-in-out infinite alternate;}}
 @keyframes pulseGlow{{from{{opacity:.6}}to{{opacity:1}}}}
@@ -507,41 +360,10 @@ section[data-testid="stSidebar"] .stButton>button{{background:{"linear-gradient(
 .stButton>button:active{{transform:translateY(0) !important;}}
 .stDownloadButton>button{{background:{BG3} !important;color:{TEXT1} !important;border:1px solid {BORDER} !important;border-radius:12px !important;font-weight:600 !important;}}
 .stDownloadButton>button:hover{{border-color:{ACCENT1} !important;color:{ACCENT1} !important;background:{"rgba(74,222,128,0.06)" if T=="dark" else "rgba(124,58,237,0.06)"} !important;}}
-
-/* ── Theme toggle button — same neutral style as Logout ── */
-div[data-testid="stButton"]:has(button[kind="secondary"]#theme_btn) button,
-button[key="theme_btn"],
-[data-testid="stButton"] button[kind="secondary"] {{}}
-div[data-testid="column"]:nth-child(2) .stButton>button {{
-  background:{BG2 if T=="dark" else "#ffffff"} !important;
-  color:{TEXT1} !important;
-  border:1px solid {BORDER} !important;
-  box-shadow:{"0 2px 8px rgba(0,0,0,0.4)" if T=="dark" else "0 2px 8px rgba(0,0,0,0.12)"} !important;
-  font-weight:600 !important;
-  min-width:90px !important;
-}}
-div[data-testid="column"]:nth-child(2) .stButton>button:hover {{
-  border-color:{ACCENT1} !important;
-  color:{ACCENT1} !important;
-  background:{"rgba(74,222,128,0.06)" if T=="dark" else "rgba(124,58,237,0.06)"} !important;
-  transform:translateY(-2px) !important;
-  box-shadow:{"0 4px 14px rgba(74,222,128,0.2)" if T=="dark" else "0 4px 14px rgba(124,58,237,0.2)"} !important;
-}}
-div[data-testid="column"]:nth-child(3) .stButton>button {{
-  background:{BG2 if T=="dark" else "#ffffff"} !important;
-  color:{TEXT1} !important;
-  border:1px solid {BORDER} !important;
-  box-shadow:{"0 2px 8px rgba(0,0,0,0.4)" if T=="dark" else "0 2px 8px rgba(0,0,0,0.12)"} !important;
-  font-weight:600 !important;
-  min-width:90px !important;
-}}
-div[data-testid="column"]:nth-child(3) .stButton>button:hover {{
-  border-color:{ACCENTR} !important;
-  color:{ACCENTR} !important;
-  background:rgba(248,113,113,0.06) !important;
-  transform:translateY(-2px) !important;
-  box-shadow:0 4px 14px rgba(248,113,113,0.2) !important;
-}}
+div[data-testid="column"]:nth-child(2) .stButton>button {{background:{BG2 if T=="dark" else "#ffffff"} !important;color:{TEXT1} !important;border:1px solid {BORDER} !important;box-shadow:{"0 2px 8px rgba(0,0,0,0.4)" if T=="dark" else "0 2px 8px rgba(0,0,0,0.12)"} !important;font-weight:600 !important;min-width:90px !important;}}
+div[data-testid="column"]:nth-child(2) .stButton>button:hover {{border-color:{ACCENT1} !important;color:{ACCENT1} !important;background:{"rgba(74,222,128,0.06)" if T=="dark" else "rgba(124,58,237,0.06)"} !important;transform:translateY(-2px) !important;}}
+div[data-testid="column"]:nth-child(3) .stButton>button {{background:{BG2 if T=="dark" else "#ffffff"} !important;color:{TEXT1} !important;border:1px solid {BORDER} !important;box-shadow:{"0 2px 8px rgba(0,0,0,0.4)" if T=="dark" else "0 2px 8px rgba(0,0,0,0.12)"} !important;font-weight:600 !important;min-width:90px !important;}}
+div[data-testid="column"]:nth-child(3) .stButton>button:hover {{border-color:{ACCENTR} !important;color:{ACCENTR} !important;background:rgba(248,113,113,0.06) !important;transform:translateY(-2px) !important;}}
 .hero-wrap{{min-height:45vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:4rem 2rem;position:relative;}}
 .hero-wrap h1{{font-size:3.8rem;font-weight:900;letter-spacing:-.04em;background:{HERO_H1_GRAD};-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin:0 0 1rem;line-height:1.05;position:relative;}}
 .hero-wrap p{{font-size:1.1rem;color:{TEXT2};max-width:560px;line-height:1.7;margin:0 0 2rem;position:relative;}}
@@ -556,77 +378,8 @@ div[data-testid="column"]:nth-child(3) .stButton>button:hover {{
 @keyframes fadeIn{{from{{opacity:0}}to{{opacity:1}}}}
 .slide-up{{animation:slideUp .45s ease-out both;}}
 .fade-in{{animation:fadeIn .5s ease-out both;}}
-
-/* PLAN BADGE */
-.plan-badge{{display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.72rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;}}
-.plan-badge.free{{background:rgba(107,114,128,0.15);color:#9ca3af;border:1px solid rgba(107,114,128,0.3);}}
-.plan-badge.pro{{background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.4);}}
-.plan-badge.enterprise{{background:rgba(192,132,252,0.15);color:#c084fc;border:1px solid rgba(192,132,252,0.4);}}
-
-/* UPGRADE WALL */
-.upgrade-wall{{background:{"rgba(251,191,36,0.06)" if T=="dark" else "rgba(251,191,36,0.08)"};border:2px dashed {"rgba(251,191,36,0.40)" if T=="dark" else "rgba(251,191,36,0.50)"};border-radius:16px;padding:2rem;text-align:center;margin:1rem 0;}}
-
-/* AUTH */
-.auth-overlay{{position:fixed;inset:0;z-index:9999;background:{"rgba(0,0,0,0.97)" if T=="dark" else "rgba(248,244,255,0.98)"};display:flex;align-items:center;justify-content:center;backdrop-filter:blur(12px);}}
-
-/* ── SIDEBAR NATIVE TOGGLE — MAKE VISIBLE ── */
-[data-testid="collapsedControl"],
-button[data-testid="collapsedControl"] {{
-  display:flex !important;
-  visibility:visible !important;
-  opacity:1 !important;
-  pointer-events:all !important;
-  background:{"#16a34a" if T=="dark" else "#5b21b6"} !important;
-  border-radius:0 10px 10px 0 !important;
-  min-width:24px !important;
-  width:24px !important;
-  box-shadow:{"3px 0 12px rgba(74,222,128,0.5)" if T=="dark" else "3px 0 12px rgba(124,58,237,0.5)"} !important;
-}}
-[data-testid="collapsedControl"] svg,
-button[data-testid="collapsedControl"] svg {{
-  color:#ffffff !important;
-  fill:#ffffff !important;
-}}
-
-/* Sidebar internal collapse button */
-[data-testid="stSidebarCollapseButton"] button,
-button[kind="header"] {{
-  visibility:visible !important;
-  opacity:1 !important;
-  background:{"rgba(74,222,128,0.12)" if T=="dark" else "rgba(124,58,237,0.12)"} !important;
-  border:1px solid {"rgba(74,222,128,0.3)" if T=="dark" else "rgba(124,58,237,0.3)"} !important;
-  border-radius:8px !important;
-  color:{"#4ade80" if T=="dark" else "#7c3aed"} !important;
-}}
-
-/* Floating open-sidebar button (custom) */
-#sidebar-open-btn {{
-  position:fixed;
-  left:0;
-  top:50%;
-  transform:translateY(-50%);
-  z-index:999999;
-  background:{"linear-gradient(180deg,#16a34a,#15803d)" if T=="dark" else "linear-gradient(180deg,#5b21b6,#4c1d95)"};
-  border:none;
-  border-radius:0 12px 12px 0;
-  width:30px;
-  height:64px;
-  cursor:pointer;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  box-shadow:{"4px 0 20px rgba(74,222,128,0.6)" if T=="dark" else "4px 0 20px rgba(124,58,237,0.6)"};
-  transition:width 0.2s ease, box-shadow 0.2s ease;
-}}
-#sidebar-open-btn:hover {{
-  width:40px;
-  box-shadow:{"6px 0 28px rgba(74,222,128,0.8)" if T=="dark" else "6px 0 28px rgba(124,58,237,0.8)"};
-}}
-#sidebar-open-btn svg {{
-  width:16px;
-  height:16px;
-  fill:white;
-}}
+[data-testid="collapsedControl"],button[data-testid="collapsedControl"] {{display:flex !important;visibility:visible !important;opacity:1 !important;pointer-events:all !important;background:{"#16a34a" if T=="dark" else "#5b21b6"} !important;border-radius:0 10px 10px 0 !important;min-width:24px !important;width:24px !important;}}
+[data-testid="stSidebarCollapseButton"] button,button[kind="header"] {{visibility:visible !important;opacity:1 !important;background:{"rgba(74,222,128,0.12)" if T=="dark" else "rgba(124,58,237,0.12)"} !important;border:1px solid {"rgba(74,222,128,0.3)" if T=="dark" else "rgba(124,58,237,0.3)"} !important;border-radius:8px !important;color:{"#4ade80" if T=="dark" else "#7c3aed"} !important;}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -691,7 +444,7 @@ if not st.session_state.authenticated:
                         users_db[su_email] = {
                             "name": su_name, "email": su_email,
                             "password_hash": hash_password(su_pass),
-                            "signup_date": now_str(), "plan": "free"
+                            "signup_date": now_str(),
                         }
                         save_json(USERS_FILE, users_db)
                         update_user_history(su_email, {
@@ -702,7 +455,6 @@ if not st.session_state.authenticated:
                         notify_signup({"name": su_name, "email": su_email})
                         st.session_state.authenticated = True
                         st.session_state.current_user = {"name": su_name, "email": su_email}
-                        # Create persistent token so refresh doesn't log out
                         token = create_token(su_email)
                         st.session_state.login_token = token
                         try:
@@ -735,7 +487,6 @@ if not st.session_state.authenticated:
                         notify_signin({"name": udata["name"], "email": si_email})
                         st.session_state.authenticated = True
                         st.session_state.current_user = {"name": udata["name"], "email": si_email}
-                        # Create persistent token so refresh doesn't log out
                         token = create_token(si_email)
                         st.session_state.login_token = token
                         try:
@@ -749,17 +500,10 @@ if not st.session_state.authenticated:
     st.stop()
 
 # ─────────────────────────────────────────────
-#  GET CURRENT USER PLAN (after auth)
+#  GET CURRENT USER INFO (after auth)
 # ─────────────────────────────────────────────
 uemail_global = st.session_state.current_user.get("email","") if st.session_state.current_user else ""
 uname_global  = st.session_state.current_user.get("name","User") if st.session_state.current_user else "User"
-current_plan  = get_user_plan(uemail_global)
-plan_limits   = PLAN_LIMITS[current_plan]
-
-PLAN_COLORS = {"free": "#6b7280", "pro": "#4ade80", "enterprise": "#c084fc"}
-PLAN_ICONS  = {"free": "🌱", "pro": "⚡", "enterprise": "🏢"}
-plan_color  = PLAN_COLORS.get(current_plan, "#6b7280")
-plan_icon   = PLAN_ICONS.get(current_plan, "🌱")
 
 # ─────────────────────────────────────────────
 #  ANIMATED HEADER
@@ -782,7 +526,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-#  THEME TOGGLE + USER INFO + LOGOUT
+#  THEME TOGGLE + LOGOUT
 # ─────────────────────────────────────────────
 _tcol1, _tcol2, _tcol3 = st.columns([9, 1, 1])
 with _tcol2:
@@ -791,7 +535,6 @@ with _tcol2:
         st.session_state.theme = "light" if is_dark else "dark"; st.rerun()
 with _tcol3:
     if st.button("🚪 Logout", key="logout_btn", help=f"Logged in as {uname_global}"):
-        # Delete persisted token so refresh doesn't auto-login
         tok = st.session_state.get("login_token")
         if tok:
             delete_token(tok)
@@ -804,76 +547,11 @@ with _tcol3:
         st.session_state.login_token = None
         st.rerun()
 
-# ── FLOATING SIDEBAR RESTORE BUTTON ────────────────────────────────
-# Appears on the left edge when sidebar is collapsed — click to reopen
-st.markdown(f"""
-<button id="sidebar-open-btn" title="Open Sidebar"
-  style="position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:999999;
-    background:{"linear-gradient(180deg,#16a34a,#15803d)" if T=="dark" else "linear-gradient(180deg,#5b21b6,#4c1d95)"};
-    border:none;border-radius:0 12px 12px 0;width:32px;height:64px;
-    cursor:pointer;display:none;align-items:center;justify-content:center;
-    box-shadow:{"5px 0 20px rgba(74,222,128,0.7)" if T=="dark" else "5px 0 20px rgba(124,58,237,0.7)"};"
-  onclick="
-    var found = false;
-    var selectors = [
-      '[data-testid=collapsedControl]',
-      'button[data-testid=collapsedControl]',
-      '[data-testid=stSidebarCollapseButton] button',
-      'button[aria-label*=idebar]',
-      'button[aria-label*=pen]',
-      'button[aria-label*=ollapse]'
-    ];
-    for(var s of selectors) {{
-      var el = window.parent.document.querySelector(s);
-      if(el) {{ el.click(); found=true; break; }}
-    }}
-    if(!found) {{
-      var allBtns = window.parent.document.querySelectorAll('button');
-      for(var b of allBtns) {{
-        var lbl = (b.getAttribute('aria-label')||'').toLowerCase();
-        var title = (b.getAttribute('title')||'').toLowerCase();
-        if(lbl.includes('sidebar') || lbl.includes('open') || title.includes('sidebar')) {{
-          b.click(); found=true; break;
-        }}
-      }}
-    }}
-    document.getElementById('sidebar-open-btn').style.display='none';
-  ">
-  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round">
-    <polyline points="9 18 15 12 9 6"></polyline>
-  </svg>
-</button>
-<script>
-(function() {{
-  var tries = 0;
-  function watchSidebar() {{
-    tries++;
-    var btn = document.getElementById('sidebar-open-btn');
-    if (!btn && tries < 20) {{ setTimeout(watchSidebar, 300); return; }}
-    if (!btn) return;
-    function check() {{
-      var sb = window.parent.document.querySelector('section[data-testid="stSidebar"]');
-      if (!sb) {{ btn.style.display = 'none'; return; }}
-      var w = sb.getBoundingClientRect().width;
-      var visible = (w > 60);
-      btn.style.display = visible ? 'none' : 'flex';
-    }}
-    setInterval(check, 400);
-    check();
-  }}
-  watchSidebar();
-}})();
-</script>
-""", unsafe_allow_html=True)
-
 # ─────────────────────────────────────────────
 #  SIDEBAR
 # ─────────────────────────────────────────────
 with st.sidebar:
     uhist_sb = get_user_history(uemail_global)
-    datasets_used_month = get_datasets_used_this_month(uemail_global)
-    max_ds_month = plan_limits["datasets_per_month"]
-    ds_display = f"{datasets_used_month}/{max_ds_month}" if max_ds_month < 999999 else f"{datasets_used_month}/∞"
 
     st.markdown(f"""
     <div class="sidebar-section" style="margin-bottom:.75rem">
@@ -881,26 +559,19 @@ with st.sidebar:
         <div style="width:36px;height:36px;border-radius:50%;background:{"linear-gradient(135deg,#4ade80,#60a5fa)" if T=="dark" else "linear-gradient(135deg,#7c3aed,#2563eb)"};display:flex;align-items:center;justify-content:center;font-size:1rem;font-weight:700;color:#fff;flex-shrink:0">{uname_global[0].upper()}</div>
         <div style="min-width:0">
           <div style="font-size:.82rem;font-weight:700;color:{"#f9fafb" if T=="dark" else "#111111"};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{uname_global}</div>
-          <span class="plan-badge {current_plan}">{plan_icon} {current_plan.upper()}</span>
+          <div style="font-size:.7rem;color:{"#6b7280" if T=="dark" else "#888"}">{uemail_global}</div>
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-top:.75rem">
         <div style="background:{"rgba(255,255,255,0.04)" if T=="dark" else "#f3eeff"};border-radius:8px;padding:.5rem .6rem;text-align:center">
-          <div style="font-size:1.1rem;font-weight:900;color:{plan_color}">{ds_display}</div>
-          <div style="font-size:.6rem;color:{"#6b7280" if T=="dark" else "#888"};text-transform:uppercase;letter-spacing:.05em">Datasets/mo</div>
+          <div style="font-size:1.1rem;font-weight:900;color:{ACCENT2}">{uhist_sb.get('login_count',0)}</div>
+          <div style="font-size:.6rem;color:{"#6b7280" if T=="dark" else "#888"};text-transform:uppercase;letter-spacing:.05em">Logins</div>
         </div>
         <div style="background:{"rgba(255,255,255,0.04)" if T=="dark" else "#f3eeff"};border-radius:8px;padding:.5rem .6rem;text-align:center">
-          <div style="font-size:1.1rem;font-weight:900;color:{"#60a5fa" if T=="dark" else "#2563eb"}">{uhist_sb.get('datasets_trained',0)}</div>
-          <div style="font-size:.6rem;color:{"#6b7280" if T=="dark" else "#888"};text-transform:uppercase;letter-spacing:.05em">Trained Total</div>
+          <div style="font-size:1.1rem;font-weight:900;color:{ACCENT1}">{uhist_sb.get('datasets_trained',0)}</div>
+          <div style="font-size:.6rem;color:{"#6b7280" if T=="dark" else "#888"};text-transform:uppercase;letter-spacing:.05em">Trained</div>
         </div>
       </div>
-      {"" if max_ds_month >= 999999 else f'''
-      <div style="margin-top:.6rem">
-        <div style="height:5px;background:{"#1c1c1c" if T=="dark" else "#e0e0e0"};border-radius:3px;overflow:hidden">
-          <div style="height:100%;width:{min(100,datasets_used_month/max_ds_month*100):.0f}%;background:linear-gradient(90deg,{plan_color},{plan_color}99);border-radius:3px"></div>
-        </div>
-        <div style="font-size:.62rem;color:{"#6b7280" if T=="dark" else "#aaa"};margin-top:.25rem">{datasets_used_month} of {max_ds_month} datasets used this month</div>
-      </div>'''}
     </div>
     """, unsafe_allow_html=True)
 
@@ -1001,11 +672,6 @@ def detect_problem_type(s):
     if u / n < 0.05 and u <= 20: return "classification"
     return "regression"
 
-def safe_compare(ptype, n_select=1):
-    fn = clf_compare if ptype == "classification" else reg_compare
-    res = fn(n_select=n_select, verbose=False)
-    return res[0] if isinstance(res, list) else res
-
 def fmt_time(s):
     return f"{int(s//60)}m {int(s%60)}s" if s >= 60 else f"{s:.1f}s"
 
@@ -1015,21 +681,6 @@ def chart_layout(**kwargs):
                 margin=dict(t=44, b=20, l=20, r=20), title_font=dict(size=13, color=TEXT1))
     base.update(kwargs)
     return base
-
-def plan_gate(feature_key: str, upgrade_msg: str = None):
-    """Returns True if user has access, shows upgrade wall if not"""
-    if plan_limits.get(feature_key, False):
-        return True
-    msg = upgrade_msg or f"This feature requires a higher plan. You're on **{current_plan.upper()}**."
-    st.markdown(f"""
-    <div class="upgrade-wall">
-      <div style="font-size:2.5rem;margin-bottom:.5rem">🔒</div>
-      <div style="font-size:1rem;font-weight:800;color:{ACCENTY};margin-bottom:.4rem">Feature Locked</div>
-      <div style="font-size:.875rem;color:{TEXT2};margin-bottom:1rem">{msg}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.info("👑 Go to the **Upgrade** tab to unlock this feature.")
-    return False
 
 # ─────────────────────────────────────────────
 #  MAIN CONTENT
@@ -1041,9 +692,9 @@ if st.session_state.data is not None:
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = df.select_dtypes(include=["object","category"]).columns.tolist()
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊  Data Explorer", "🧬  EDA & Insights", "⚙️  Train Model",
-        "🏆  Results", "📜  My History", "👑  Upgrade",
+        "🏆  Results", "📜  My History",
     ])
 
     # ═══════════════════════════
@@ -1219,37 +870,10 @@ if st.session_state.data is not None:
                     st.success("✅ No missing values found in this dataset!")
 
     # ═══════════════════════════
-    # TAB 3 — TRAIN MODEL (with plan enforcement)
+    # TAB 3 — TRAIN MODEL
     # ═══════════════════════════
     with tab3:
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">⚙️</div><h3>Training Configuration</h3></div>""", unsafe_allow_html=True)
-
-        # ── Plan Usage Banner ──────────────────────────────
-        can_train_now, cant_reason = can_train(uemail_global)
-        if not can_train_now:
-            st.markdown(f"""
-            <div class="upgrade-wall">
-              <div style="font-size:2.5rem;margin-bottom:.5rem">🚫</div>
-              <div style="font-size:1rem;font-weight:800;color:{ACCENTR};margin-bottom:.4rem">Monthly Limit Reached</div>
-              <div style="font-size:.9rem;color:{TEXT2}">{cant_reason}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            st.info("👑 Go to the **Upgrade** tab to unlock unlimited training.")
-        else:
-            # Show remaining quota
-            if max_ds_month < 999999:
-                remaining = max_ds_month - datasets_used_month
-                quota_color = ACCENT1 if remaining > 1 else ACCENTY
-                st.markdown(f"""
-                <div style="background:{"rgba(74,222,128,0.06)" if T=="dark" else "rgba(74,222,128,0.08)"};border:1px solid {"rgba(74,222,128,0.25)" if T=="dark" else "rgba(74,222,128,0.30)"};border-radius:12px;padding:.9rem 1.25rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
-                  <span style="font-size:1.3rem">📊</span>
-                  <div>
-                    <span style="font-size:.85rem;color:{TEXT2}">You have </span>
-                    <span style="font-size:.9rem;font-weight:800;color:{quota_color}">{remaining} dataset training{'' if remaining==1 else 's'} remaining</span>
-                    <span style="font-size:.85rem;color:{TEXT2}"> this month ({current_plan.upper()} plan)</span>
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
 
         tc1, tc2 = st.columns([3, 1])
         with tc1:
@@ -1280,19 +904,6 @@ if st.session_state.data is not None:
               </div>
             </div>""", unsafe_allow_html=True)
 
-            # ── Show what's available on this plan ──────────
-            max_folds = plan_limits["cv_folds_max"]
-            has_advanced = plan_limits["advanced_models"]
-            st.markdown(f"""
-            <div style="background:{"rgba(255,255,255,0.03)" if T=="dark" else "rgba(0,0,0,0.03)"};border:1px solid {BORDER};border-radius:12px;padding:1rem 1.25rem;margin:.75rem 0;display:flex;flex-wrap:wrap;gap:.75rem">
-              <span class="insight-chip" style="border-color:{plan_color};color:{plan_color}">{plan_icon} {current_plan.upper()} Plan</span>
-              <span class="insight-chip">🔁 Max {max_folds}-fold CV</span>
-              <span class="insight-chip">🤖 {"15+ algorithms" if has_advanced else "5 basic algorithms"}</span>
-              <span class="insight-chip">📦 {"XGBoost, LGBM included" if has_advanced else "XGBoost locked 🔒"}</span>
-              {"<span class='insight-chip' style='border-color:"+ACCENTY+";color:"+ACCENTY+"'>💡 Upgrade for more</span>" if current_plan=="free" else ""}
-            </div>
-            """, unsafe_allow_html=True)
-
             st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
             with st.expander("⚙️ Advanced Configuration", expanded=False):
@@ -1300,18 +911,9 @@ if st.session_state.data is not None:
                 with ac1:
                     train_size = st.slider("Training Split", 0.5, 0.9, 0.8, 0.05)
                 with ac2:
-                    # Enforce max folds based on plan
-                    fold = st.slider(
-                        f"CV Folds (max {max_folds} on {current_plan} plan)",
-                        2, max_folds, min(5, max_folds)
-                    )
+                    fold = st.slider("CV Folds", 2, 10, 5)
                 with ac3:
-                    # Enforce max algorithms based on plan
-                    max_algo_slider = plan_limits["max_algorithms"]
-                    max_models = st.slider(
-                        f"Max Models (max {max_algo_slider} on {current_plan} plan)",
-                        3, max_algo_slider, min(10, max_algo_slider)
-                    )
+                    max_models = st.slider("Max Models", 3, 15, 10)
                 ac4, ac5 = st.columns(2)
                 with ac4:
                     normalize = st.checkbox("Normalize Features", value=True)
@@ -1323,8 +925,7 @@ if st.session_state.data is not None:
 
             col_btn1, col_btn2 = st.columns([3, 1])
             with col_btn1:
-                train_label = "🚀 Launch Training" if can_train_now else "🔒 Upgrade to Train More"
-                train_clicked = st.button(train_label, use_container_width=True, disabled=not can_train_now)
+                train_clicked = st.button("🚀 Launch Training", use_container_width=True)
             with col_btn2:
                 if st.session_state.results is not None:
                     if st.button("🔄 Reset Results", use_container_width=True):
@@ -1332,7 +933,7 @@ if st.session_state.data is not None:
                         st.session_state.best_model = None
                         st.session_state.training_time = None; st.rerun()
 
-            if train_clicked and can_train_now:
+            if train_clicked:
                 steps = [
                     ("Data Preprocessing",   "Handling nulls, encoding categoricals…"),
                     ("Feature Engineering",  "Scaling, transformations, pipeline setup…"),
@@ -1355,7 +956,6 @@ if st.session_state.data is not None:
                     for si in range(len(steps)):
                         placeholder.markdown(render_steps(si), unsafe_allow_html=True)
                         if si == 2:
-                            # PyCaret setup — no 'exclude' in setup(), it goes in compare_models
                             kw_setup = dict(
                                 data=df, target=target_col,
                                 train_size=float(train_size),
@@ -1364,16 +964,10 @@ if st.session_state.data is not None:
                                 session_id=42,
                                 verbose=False
                             )
-                            # remove_outliers only if user enabled it (may fail on small datasets)
                             if remove_out:
                                 kw_setup["remove_outliers"] = True
 
-                            # exclude goes into compare_models, not setup
                             kw_compare = dict(verbose=False, n_select=1, budget_time=5.0)
-                            if not has_advanced:
-                                # Exclude boosting models on free plan
-                                kw_compare["exclude"] = ["xgboost","lightgbm","catboost",
-                                                         "gbc","gbr","et","ada"]
 
                             if ptype == "classification":
                                 clf_setup(**kw_setup)
@@ -1409,8 +1003,6 @@ if st.session_state.data is not None:
                             pass
 
                     st.success(f"✅ Training complete in **{fmt_time(elapsed)}**! Head to the 🏆 Results tab.")
-                    if not has_advanced:
-                        st.info("💡 **Pro tip:** Upgrade to Pro to include XGBoost, LightGBM, and CatBoost for potentially better scores!")
                     st.balloons()
                 except Exception as e:
                     placeholder.empty()
@@ -1455,18 +1047,10 @@ if st.session_state.data is not None:
                 st.download_button("📥 Export Results CSV", res_df.to_csv(index=False),
                                    f"results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv", "text/csv", use_container_width=True)
             with ex2:
-                # Model export gated on plan
-                if plan_limits["export_model"]:
-                    model_info = f"Best Model: {best_name}\n{metric_name}: {top_score:.4f}\nFolds: {folds_used}"
-                    st.download_button("📋 Export Model Info", model_info, "model_info.txt", "text/plain", use_container_width=True)
-                else:
-                    if st.button("🔒 Export Model (.pkl) — Pro Only", use_container_width=True):
-                        st.warning("⚡ Upgrade to Pro to export trained models!")
+                model_info = f"Best Model: {best_name}\n{metric_name}: {top_score:.4f}\nFolds: {folds_used}"
+                st.download_button("📋 Export Model Info", model_info, "model_info.txt", "text/plain", use_container_width=True)
             with ex3:
-                if plan_limits["export_model"]:
-                    st.info(f"💾 Saved: `best_model.pkl`")
-                else:
-                    st.markdown(f'<div style="text-align:center;padding:.7rem;border-radius:10px;background:{BG3};border:1px dashed {BORDER};font-size:.8rem;color:{TEXT3}">🔒 Model export locked — Pro plan</div>', unsafe_allow_html=True)
+                st.info(f"💾 Saved: `best_model.pkl`")
 
             st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
             st.markdown(f"""<div class="section-head"><div class="icon-wrap">📋</div><h3>All Models Ranked</h3></div>""", unsafe_allow_html=True)
@@ -1525,11 +1109,10 @@ if st.session_state.data is not None:
                     st.info("Need 2+ numeric metrics for scatter.")
 
     # ═══════════════════════════
-    # TAB 5 — MY HISTORY (gated for free plan)
+    # TAB 5 — MY HISTORY
     # ═══════════════════════════
     with tab5:
         uhist_h = get_user_history(uemail_global)
-        history_limit = plan_limits["history_entries"]
 
         st.markdown(f"""
         <div class="stat-grid slide-up" style="grid-template-columns:repeat(4,1fr)">
@@ -1547,27 +1130,16 @@ if st.session_state.data is not None:
             <div class="sub">signup date</div>
           </div>
           <div class="stat-card">
-            <div class="bar"></div><div class="label">This Month</div>
-            <div class="value" style="font-size:1.5rem">{datasets_used_month}</div>
-            <div class="sub">{"of ∞" if max_ds_month >= 999999 else f"of {max_ds_month}"} datasets</div>
+            <div class="bar"></div><div class="label">Last Login</div>
+            <div class="value" style="font-size:.9rem;padding-top:.3rem">{uhist_h.get('last_login','—')[:10] if uhist_h.get('last_login') else '—'}</div>
+            <div class="sub">date</div>
           </div>
         </div>
         """, unsafe_allow_html=True)
 
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-        full_training_log = uhist_h.get("training_log", [])
-        # Free plan: only show last 3
-        if not plan_limits["full_history"] and len(full_training_log) > history_limit:
-            training_log = full_training_log[-history_limit:]
-            st.markdown(f"""
-            <div style="background:{"rgba(251,191,36,0.06)" if T=="dark" else "rgba(251,191,36,0.08)"};border:1px solid {"rgba(251,191,36,0.30)" if T=="dark" else "rgba(251,191,36,0.35)"};border-radius:12px;padding:.9rem 1.25rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem">
-              <span style="font-size:1.2rem">⚠️</span>
-              <div style="font-size:.85rem;color:{TEXT2}">Showing last <b style="color:{ACCENTY}">{history_limit}</b> of <b>{len(full_training_log)}</b> training runs. <b>Upgrade to Pro</b> to see your full history.</div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            training_log = full_training_log
+        training_log = uhist_h.get("training_log", [])
 
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">🗂️</div><h3>Previous Work — Datasets & Projects</h3></div>""", unsafe_allow_html=True)
 
@@ -1656,8 +1228,8 @@ if st.session_state.data is not None:
         with hist_col2:
             st.markdown(f"""<div class="section-head"><div class="icon-wrap">📋</div><h3>Activity Log</h3></div>""", unsafe_allow_html=True)
             activity_log = list(reversed(uhist_h.get("activity_log", [])))[:25]
-            act_icons = {"signup":"✨","signin":"🔑","training_complete":"🏆","logout":"🚪","payment_submitted":"💳"}
-            act_colors = {"signup":ACCENT1,"signin":ACCENT2,"training_complete":ACCENTY,"logout":TEXT3,"payment_submitted":ACCENT3}
+            act_icons = {"signup":"✨","signin":"🔑","training_complete":"🏆","logout":"🚪"}
+            act_colors = {"signup":ACCENT1,"signin":ACCENT2,"training_complete":ACCENTY,"logout":TEXT3}
             if not activity_log:
                 st.info("No activity yet.")
             else:
@@ -1689,496 +1261,6 @@ if st.session_state.data is not None:
             if not alog_df.empty:
                 st.download_button("📥 Export Activity Log CSV", alog_df.to_csv(index=False),
                                    f"activity_log_{uemail_global[:10]}.csv", "text/csv", use_container_width=True)
-
-    # ═══════════════════════════
-    # TAB 6 — UPGRADE (FIXED)
-    # ═══════════════════════════
-    with tab6:
-        # ── Subscription Section Animations ──────────────
-        st.markdown(f"""
-        <style>
-        /* ── Floating particles background ── */
-        @keyframes floatUp {{
-          0%   {{ transform: translateY(0px) rotate(0deg);   opacity: 0; }}
-          10%  {{ opacity: .6; }}
-          90%  {{ opacity: .3; }}
-          100% {{ transform: translateY(-320px) rotate(360deg); opacity: 0; }}
-        }}
-        .sub-particle {{
-          position: absolute; border-radius: 50%;
-          animation: floatUp linear infinite;
-          pointer-events: none;
-        }}
-
-        /* ── Plan card entrance stagger ── */
-        @keyframes cardEntrance {{
-          from {{ opacity: 0; transform: translateY(40px) scale(.95); }}
-          to   {{ opacity: 1; transform: translateY(0)   scale(1); }}
-        }}
-        .plan-card-anim {{ animation: cardEntrance .55s cubic-bezier(.22,.68,0,1.2) both; }}
-        .plan-card-anim.delay1 {{ animation-delay: .08s; }}
-        .plan-card-anim.delay2 {{ animation-delay: .18s; }}
-        .plan-card-anim.delay3 {{ animation-delay: .28s; }}
-
-        /* ── Card hover glow lift ── */
-        .plan-card-inner {{
-          transition: transform .3s ease, box-shadow .3s ease !important;
-        }}
-        .plan-card-inner:hover {{
-          transform: translateY(-10px) scale(1.02) !important;
-          box-shadow: 0 24px 60px {"rgba(74,222,128,0.28)" if T=="dark" else "rgba(124,58,237,0.28)"} !important;
-        }}
-
-        /* ── Popular badge shimmer ── */
-        @keyframes shimmer {{
-          0%   {{ background-position: -200% center; }}
-          100% {{ background-position:  200% center; }}
-        }}
-        .popular-shimmer {{
-          background: linear-gradient(90deg, #16a34a 20%, #86efac 40%, #22c55e 60%, #16a34a 80%) !important;
-          background-size: 200% auto !important;
-          animation: shimmer 2.4s linear infinite !important;
-          -webkit-background-clip: unset !important;
-          background-clip: unset !important;
-          -webkit-text-fill-color: unset !important;
-        }}
-
-        /* ── Price number count-up pulse ── */
-        @keyframes pricePop {{
-          0%   {{ transform: scale(.7);  opacity: 0; }}
-          70%  {{ transform: scale(1.12); opacity: 1; }}
-          100% {{ transform: scale(1);   opacity: 1; }}
-        }}
-        .price-pop {{ animation: pricePop .5s cubic-bezier(.22,.68,0,1.2) .35s both; }}
-
-        /* ── CTA button pulse ── */
-        @keyframes btnPulse {{
-          0%, 100% {{ box-shadow: 0 0 0 0 {"rgba(74,222,128,0.55)" if T=="dark" else "rgba(124,58,237,0.55)"}; }}
-          50%       {{ box-shadow: 0 0 0 10px transparent; }}
-        }}
-        .sub-cta-pulse .stButton>button {{
-          animation: btnPulse 2s ease-in-out infinite !important;
-        }}
-
-        /* ── Hero crown bounce ── */
-        @keyframes crownBounce {{
-          0%, 100% {{ transform: translateY(0) rotate(-5deg); }}
-          50%       {{ transform: translateY(-10px) rotate(5deg); }}
-        }}
-        .crown-bounce {{ display:inline-block; animation: crownBounce 2.8s ease-in-out infinite; }}
-
-        /* ── Glow divider wave ── */
-        @keyframes dividerPulse {{
-          0%, 100% {{ opacity: .3; }}
-          50%       {{ opacity: .8; }}
-        }}
-        .sub-glow-div {{
-          height: 2px;
-          margin: 1.5rem 0;
-          background: {GLOW_DIV};
-          animation: dividerPulse 2.5s ease-in-out infinite;
-          border-radius: 2px;
-        }}
-
-        /* ── Feature row check icon pop ── */
-        @keyframes checkPop {{
-          from {{ transform: scale(0) rotate(-45deg); opacity: 0; }}
-          to   {{ transform: scale(1) rotate(0deg);   opacity: 1; }}
-        }}
-        .feat-check {{ display:inline-block; animation: checkPop .35s cubic-bezier(.22,.68,0,1.2) both; }}
-
-        /* ── JazzCash modal slide-in ── */
-        @keyframes modalSlide {{
-          from {{ opacity: 0; transform: translateY(30px); }}
-          to   {{ opacity: 1; transform: translateY(0); }}
-        }}
-        .jc-modal-anim {{ animation: modalSlide .45s ease-out both; }}
-
-        /* ── FAQ expander row highlight on open ── */
-        .streamlit-expanderHeader:focus-within {{
-          border-color: {ACCENT1} !important;
-          box-shadow: 0 0 0 3px {"rgba(74,222,128,0.15)" if T=="dark" else "rgba(124,58,237,0.15)"} !important;
-        }}
-
-        /* ── Billing toggle pill glow ── */
-        .sub-billing [data-baseweb="radio"] input:checked + div {{
-          box-shadow: 0 0 12px {"rgba(74,222,128,0.5)" if T=="dark" else "rgba(124,58,237,0.5)"} !important;
-        }}
-
-        /* ── Money-back badge pulse ── */
-        @keyframes badgePulse {{
-          0%, 100% {{ box-shadow: 0 0 0 0 {"rgba(251,191,36,0.3)"}; }}
-          50%       {{ box-shadow: 0 0 20px 6px transparent; }}
-        }}
-        .money-back-anim {{
-          animation: badgePulse 3s ease-in-out infinite;
-        }}
-        </style>
-        """, unsafe_allow_html=True)
-
-        # ── Hero ─────────────────────────────────────────
-        plan_expiry_str = ""
-        users_db_check = load_json(USERS_FILE)
-        user_expiry = users_db_check.get(uemail_global, {}).get("plan_expiry", None)
-        if user_expiry and current_plan != "free":
-            plan_expiry_str = f' · expires {user_expiry}'
-
-        st.markdown(f"""
-        <div style="text-align:center;padding:2.5rem 1rem 1.5rem;position:relative;overflow:hidden">
-          <!-- floating particles -->
-          <span class="sub-particle" style="width:6px;height:6px;background:{ACCENT1};left:15%;top:80%;animation-duration:5.2s;animation-delay:0s;opacity:.5"></span>
-          <span class="sub-particle" style="width:4px;height:4px;background:{ACCENT2};left:30%;top:90%;animation-duration:4.1s;animation-delay:.8s;opacity:.4"></span>
-          <span class="sub-particle" style="width:8px;height:8px;background:{ACCENT3};left:60%;top:85%;animation-duration:6.3s;animation-delay:.3s;opacity:.35"></span>
-          <span class="sub-particle" style="width:5px;height:5px;background:{ACCENTY};left:75%;top:88%;animation-duration:4.8s;animation-delay:1.2s;opacity:.45"></span>
-          <span class="sub-particle" style="width:3px;height:3px;background:{ACCENT1};left:50%;top:92%;animation-duration:5.6s;animation-delay:.5s;opacity:.4"></span>
-          <span class="sub-particle" style="width:7px;height:7px;background:{ACCENT2};left:85%;top:80%;animation-duration:3.9s;animation-delay:1.7s;opacity:.3"></span>
-          <div class="crown-bounce" style="font-size:3rem;margin-bottom:.5rem">👑</div>
-          <h2 style="font-size:2.2rem;font-weight:900;margin:0 0 .5rem;background:linear-gradient(135deg,{ACCENT3} 0%,{ACCENT2} 50%,{ACCENT1} 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">Unlock Your Full Potential</h2>
-          <p style="color:{TEXT2};font-size:1rem;max-width:520px;margin:0 auto 1rem;line-height:1.7">Choose the plan that fits your workflow. Upgrade anytime, cancel anytime.</p>
-          <div style="display:inline-flex;align-items:center;gap:.5rem;background:{plan_color}15;border:1px solid {plan_color}44;border-radius:999px;padding:.4rem 1.2rem;font-size:.82rem;font-weight:700;color:{plan_color}">
-            {plan_icon} Current Plan: {current_plan.upper()}{plan_expiry_str}
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown(f'<div class="sub-glow-div"></div>', unsafe_allow_html=True)
-
-        JAZZCASH_NUMBER = "03017604473"
-        JAZZCASH_NAME   = "Shayan"
-        USD_TO_PKR      = 0.0526  # approx conversion rate
-
-        # ── Billing toggle ───────────────────────────────
-        bill_col1, bill_col2, bill_col3 = st.columns([2,1,2])
-        with bill_col2:
-            billing = st.radio("Billing", ["Monthly","Yearly"], horizontal=True, label_visibility="collapsed", key="billing_toggle")
-        discount = billing == "Yearly"
-
-        # ── Plans ─────────────────────────────────────────
-        plans = [
-            {
-                "id": "free", "name": "Free", "icon": "🌱", "tagline": "Perfect to get started",
-                "price_m": 0, "price_y": 0, "color": TEXT3,
-                "border": BORDER, "bg": BG3, "popular": False,
-                "features": [
-                    ("✓","3 datasets per month",True),
-                    ("✓","5 ML algorithms",True),
-                    ("✓","Basic EDA charts",True),
-                    ("✓","3-fold cross validation",True),
-                    ("✗","Advanced models (XGBoost, LGBM)",False),
-                    ("✗","Export trained model (.pkl)",False),
-                    ("✗","Full training history (last 3 only)",False),
-                    ("✗","Priority training queue",False),
-                    ("✗","API access",False),
-                    ("✗","Team collaboration",False),
-                ],
-            },
-            {
-                "id": "pro", "name": "Pro", "icon": "⚡", "tagline": "For serious data scientists",
-                "price_m": 19, "price_y": 15, "color": ACCENT1,
-                "border": f"rgba(74,222,128,0.55)" if T=="dark" else "rgba(124,58,237,0.55)",
-                "bg": f"rgba(74,222,128,0.04)" if T=="dark" else "rgba(124,58,237,0.03)", "popular": True,
-                "features": [
-                    ("✓","Unlimited datasets",True),
-                    ("✓","15+ ML algorithms",True),
-                    ("✓","Full EDA suite",True),
-                    ("✓","10-fold cross validation",True),
-                    ("✓","Advanced models (XGBoost, LGBM)",True),
-                    ("✓","Export trained model (.pkl)",True),
-                    ("✓","Full training history (50 runs)",True),
-                    ("✓","Priority training queue",True),
-                    ("✗","API access",False),
-                    ("✗","Team collaboration",False),
-                ],
-            },
-            {
-                "id": "enterprise", "name": "Enterprise", "icon": "🏢", "tagline": "For teams & organizations",
-                "price_m": 79, "price_y": 59, "color": ACCENT3,
-                "border": f"rgba(192,132,252,0.55)" if T=="dark" else "rgba(8,145,178,0.55)",
-                "bg": f"rgba(192,132,252,0.04)" if T=="dark" else "rgba(8,145,178,0.03)", "popular": False,
-                "features": [
-                    ("✓","Everything in Pro",True),
-                    ("✓","Unlimited team members",True),
-                    ("✓","API access + webhooks",True),
-                    ("✓","Custom model deployment",True),
-                    ("✓","Dedicated training servers",True),
-                    ("✓","White-label reports",True),
-                    ("✓","SSO / SAML login",True),
-                    ("✓","SLA guarantee (99.9% uptime)",True),
-                    ("✓","Dedicated support manager",True),
-                    ("✓","Custom integrations",True),
-                ],
-            },
-        ]
-
-        p1, p2, p3 = st.columns(3)
-        cols_map = {"free": p1, "pro": p2, "enterprise": p3}
-
-        for i, plan in enumerate(plans):
-            delay_cls = ["delay1","delay2","delay3"][i]
-            with cols_map[plan["id"]]:
-                # FIX: use correct price based on billing toggle
-                price_show = plan["price_y"] if discount else plan["price_m"]
-                is_current = current_plan == plan["id"]
-
-                popular_badge = ""
-                if plan["popular"]:
-                    popular_badge = """<div class="popular-shimmer" style="position:absolute;top:-13px;left:50%;transform:translateX(-50%);color:#fff;padding:.25rem 1.1rem;border-radius:999px;font-size:.7rem;font-weight:800;letter-spacing:.06em;white-space:nowrap;box-shadow:0 4px 12px rgba(74,222,128,0.4)">✦ MOST POPULAR</div>"""
-
-                features_html = ""
-                for j, (sym, feat, active) in enumerate(plan["features"]):
-                    fc = plan["color"] if active else TEXT3
-                    fo = "1" if active else "0.4"
-                    fw = "600" if active else "400"
-                    delay_f = f"{j * 0.04:.2f}s"
-                    features_html += f'<div style="display:flex;align-items:center;gap:.55rem;padding:.4rem 0;border-bottom:1px solid {BORDER}40;opacity:{fo};animation:cardEntrance .4s ease {delay_f} both"><span class="feat-check" style="font-size:.85rem;color:{fc};flex-shrink:0;font-weight:700;animation-delay:{delay_f}">{sym}</span><span style="font-size:.8rem;color:{TEXT1 if active else TEXT3};font-weight:{fw}">{feat}</span></div>'
-
-                # Price display logic — FIX: correct PKR conversion
-                if price_show == 0:
-                    price_html = f'<div class="price-pop" style="font-size:2.6rem;font-weight:900;color:{plan["color"]};line-height:1">Free</div><div style="font-size:.78rem;color:{TEXT3};margin-top:.2rem">forever</div>'
-                else:
-                    yearly_note = f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.15rem">per month, billed yearly</div>' if discount else f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.15rem">per month</div>'
-                    save_pct = round((1 - plan["price_y"] / plan["price_m"]) * 100) if plan["price_m"] > 0 else 0
-                    save_badge = f'<span style="background:rgba(251,191,36,0.15);color:{ACCENTY};border:1px solid rgba(251,191,36,0.3);border-radius:6px;padding:.1rem .5rem;font-size:.65rem;font-weight:800;margin-left:.4rem">SAVE {save_pct}%</span>' if discount else ""
-                    price_html = f'<div class="price-pop" style="display:flex;align-items:flex-start;justify-content:center;gap:.15rem"><span style="font-size:1rem;color:{TEXT3};margin-top:.5rem;font-weight:700">$</span><span style="font-size:2.6rem;font-weight:900;color:{plan["color"]};line-height:1;font-variant-numeric:tabular-nums">{price_show}</span></div>{yearly_note}{save_badge}'
-
-                # Current plan highlight
-                current_ring = f"box-shadow:0 0 0 3px {plan['color']}55;" if is_current else ""
-
-                st.markdown(f"""
-                <div class="plan-card-anim {delay_cls}">
-                <div class="plan-card-inner" style="position:relative;background:{plan['bg']};border:{'2px' if plan['popular'] or is_current else '1px'} solid {plan['border'] if plan['popular'] or is_current else BORDER};border-radius:20px;padding:1.75rem 1.5rem 1.5rem;margin-top:{'1rem' if plan['popular'] else '0'};{current_ring}">
-                  {popular_badge}
-                  <div style="text-align:center;margin-bottom:1.25rem">
-                    <div style="font-size:2rem;margin-bottom:.3rem">{plan['icon']}</div>
-                    <div style="font-size:1.1rem;font-weight:800;color:{plan['color']}">{plan['name']}</div>
-                    <div style="font-size:.78rem;color:{TEXT3};margin-top:.2rem">{plan['tagline']}</div>
-                    {'<div style="margin-top:.4rem"><span class="plan-badge '+plan["id"]+'">✓ YOUR CURRENT PLAN</span></div>' if is_current else ''}
-                  </div>
-                  <div style="text-align:center;margin-bottom:1.25rem;padding:.75rem;background:{"rgba(255,255,255,0.03)" if T=="dark" else "rgba(0,0,0,0.03)"};border-radius:12px">
-                    {price_html}
-                  </div>
-                  <div style="margin-bottom:1.25rem">{features_html}</div>
-                </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                # CTA Buttons — clear logic
-                st.markdown("<div style='margin-top:.6rem' class='sub-cta-pulse'>", unsafe_allow_html=True)
-
-                if is_current:
-                    st.markdown(f"""
-                    <div style="text-align:center;padding:.7rem;border-radius:12px;background:{plan['color']}18;border:1px solid {plan['color']}44;font-size:.85rem;font-weight:700;color:{plan['color']}">
-                      ✓ Current Plan
-                    </div>""", unsafe_allow_html=True)
-
-                elif plan["id"] == "free":
-                    # Only show if user is NOT on free (i.e., downgrade scenario)
-                    st.markdown(f"""
-                    <div style="text-align:center;padding:.7rem;border-radius:12px;background:{BG3};border:1px solid {BORDER};font-size:.85rem;font-weight:600;color:{TEXT3}">
-                      Free Plan
-                    </div>""", unsafe_allow_html=True)
-
-                elif plan["id"] == "enterprise":
-                    if st.button("📩 Contact Sales", key=f"plan_btn_enterprise", use_container_width=True):
-                        st.session_state["show_contact_enterprise"] = True; st.rerun()
-
-                else:
-                    # PRO — FIX: use correct price for JazzCash
-                    price_pkr = price_show * USD_TO_PKR
-                    if st.button(f"⚡ Subscribe via JazzCash — Rs {price_pkr:,.0f}/mo",
-                                 key=f"plan_btn_pro", use_container_width=True):
-                        st.session_state["show_jazzcash_pro"] = True; st.rerun()
-
-                st.markdown("</div>", unsafe_allow_html=True)
-
-        # ── JazzCash Payment Modal ────────────────────────
-        if st.session_state.get("show_jazzcash_pro", False):
-            st.markdown(f'<div class="sub-glow-div"></div>', unsafe_allow_html=True)
-
-            # FIX: correctly compute PKR price from the selected billing
-            pro_price_usd = 15 if discount else 19
-            pro_price_rs  = pro_price_usd * USD_TO_PKR
-            billing_label = "Yearly (billed monthly)" if discount else "Monthly"
-
-            st.markdown(f"""
-            <div class="jc-modal-anim" style="background:{CARD_BG};border:2px solid {ACCENT1}55;border-radius:24px;padding:2rem;max-width:580px;margin:0 auto;box-shadow:0 0 40px {ACCENT1}18;position:relative;overflow:hidden">
-              <div style="position:absolute;top:0;left:0;right:0;height:4px;background:linear-gradient(90deg,{ACCENT1},{ACCENT2},{ACCENT3})"></div>
-              <div style="text-align:center;margin-bottom:1.5rem">
-                <div style="font-size:2.5rem;margin-bottom:.3rem">📱</div>
-                <div style="font-size:1.3rem;font-weight:900;color:{TEXT1}">JazzCash Payment</div>
-                <div style="font-size:.85rem;color:{TEXT2};margin-top:.3rem">Pro Plan — {billing_label} · <span style="color:{ACCENT1};font-weight:700">Rs {pro_price_rs:,.0f}/month</span></div>
-              </div>
-              <div style="background:{"rgba(74,222,128,0.06)" if T=="dark" else "rgba(0,0,0,0.04)"};border:1px solid {ACCENT1}33;border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;text-align:center">
-                <div style="font-size:.65rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:{TEXT3};margin-bottom:.5rem">Send Payment To</div>
-                <div style="font-size:2rem;font-weight:900;color:{ACCENT1};font-family:'JetBrains Mono',monospace;letter-spacing:.05em">{JAZZCASH_NUMBER}</div>
-                <div style="font-size:.9rem;color:{TEXT2};margin-top:.25rem;font-weight:600">Account Name: <span style="color:{TEXT1}">{JAZZCASH_NAME}</span></div>
-              </div>
-              <div style="margin-bottom:1.25rem">
-                <div style="font-size:.68rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:{TEXT3};margin-bottom:.6rem">📋 How to Pay</div>
-                {"".join([f'<div style="display:flex;align-items:center;gap:.75rem;padding:.45rem 0;border-bottom:1px solid {BORDER}40"><div style="width:22px;height:22px;border-radius:50%;flex-shrink:0;background:{ACCENT1}20;border:1px solid {ACCENT1}44;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:800;color:{ACCENT1}">{n}</div><div style="font-size:.82rem;color:{TEXT2}">{s}</div></div>' for n,s in [(1,"Open JazzCash app → Tap Send Money"),(2,f"Enter number: <b style='color:{TEXT1}'>{JAZZCASH_NUMBER}</b>"),(3,f"Enter amount: <b style='color:{ACCENT1}'>Rs {pro_price_rs:,.0f}</b>"),(4,"Complete payment and copy the Transaction ID"),(5,"Fill the form below — we will activate your plan within 24 hours")]])}
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            st.markdown(f'<div style="max-width:580px;margin:.75rem auto 0"><div style="font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:{TEXT3};margin-bottom:.6rem">✅ Confirm Your Payment</div></div>', unsafe_allow_html=True)
-
-            jf1, jf2 = st.columns(2)
-            with jf1:
-                txn_id = st.text_input("Transaction ID / TID", placeholder="e.g. T2501011234567", key="jc_txn")
-            with jf2:
-                jc_amount = st.text_input("Amount Sent (Rs)", placeholder=f"e.g. {pro_price_rs:,.0f}", key="jc_amount")
-
-            jc_note = st.text_area("Additional Note (optional)", placeholder="Any additional details you'd like to add...", height=60, key="jc_note")
-            screenshot = st.file_uploader("📸 Payment Screenshot (optional but recommended)", type=["png","jpg","jpeg","pdf"], key="jc_screenshot")
-
-            jb1, jb2 = st.columns(2)
-            with jb1:
-                if st.button("✅ Submit Payment Proof", key="submit_jc", use_container_width=True):
-                    if not txn_id:
-                        st.error("❌ Transaction ID is required!")
-                    else:
-                        pending = load_json("dataforge_pending_payments.json")
-                        pending[f"{uemail_global}_{now_str()[:10]}"] = {
-                            "name": uname_global, "email": uemail_global,
-                            "plan": "pro", "billing": billing_label,
-                            "amount_usd": pro_price_usd, "amount_rs": jc_amount or str(pro_price_rs),
-                            "txn_id": txn_id, "note": jc_note, "time": now_str(),
-                            "status": "pending", "screenshot": "uploaded" if screenshot else "none"
-                        }
-                        save_json("dataforge_pending_payments.json", pending)
-                        log_activity(uemail_global, "payment_submitted", f"JazzCash TxnID: {txn_id} — Rs {jc_amount}")
-
-                        send_email(
-                            f"💰 DataForge — JazzCash Payment! {uname_global} | Rs {jc_amount or pro_price_rs}",
-                            f"""
-NEW JAZZCASH PAYMENT — VERIFY & ACTIVATE
-════════════════════════════════════════
-User     : {uname_global}
-Email    : {uemail_global}
-Plan     : Pro ({billing_label})
-Amount   : ${pro_price_usd} USD = Rs {jc_amount or pro_price_rs}
-TxnID    : {txn_id}
-Screenshot: {"✅ Uploaded" if screenshot else "❌ Not uploaded"}
-Note     : {jc_note or "—"}
-Time     : {now_str()}
-════════════════════════════════════════
-TO ACTIVATE: Run this in your server:
-python -c "
-import json
-db = json.load(open('dataforge_users.json'))
-db['{uemail_global}']['plan'] = 'pro'
-db['{uemail_global}']['plan_since'] = '{now_str()[:10]}'
-db['{uemail_global}']['plan_expiry'] = '{(datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")}'
-json.dump(db, open('dataforge_users.json','w'), indent=2)
-print('✅ Done')
-"
-════════════════════════════════════════"""
-                        )
-
-                        st.session_state["show_jazzcash_pro"] = False
-                        st.success(f"✅ **Payment proof submitted successfully!**\nTransaction ID: `{txn_id}`\nWe will verify and activate your Pro plan within 24 hours.")
-                        st.balloons()
-
-            with jb2:
-                if st.button("✕ Cancel", key="cancel_jc", use_container_width=True):
-                    st.session_state["show_jazzcash_pro"] = False; st.rerun()
-
-        # ── Enterprise contact ────────────────────────────
-        if st.session_state.get("show_contact_enterprise", False):
-            st.markdown(f'<div class="sub-glow-div"></div>', unsafe_allow_html=True)
-            st.markdown(f"""<div class="section-head"><div class="icon-wrap">🏢</div><h3>Contact Enterprise Sales</h3></div>""", unsafe_allow_html=True)
-            ef1, ef2 = st.columns(2)
-            with ef1:
-                ent_company = st.text_input("Company Name", key="ent_co", placeholder="Acme Corp")
-                ent_name    = st.text_input("Your Name", key="ent_name", value=uname_global)
-            with ef2:
-                ent_email   = st.text_input("Work Email", key="ent_email", value=uemail_global)
-                ent_team    = st.selectbox("Team Size", ["1–10","11–50","51–200","200+"], key="ent_size")
-            ent_msg = st.text_area("Tell us about your needs", key="ent_msg", placeholder="e.g. We need unlimited training for 20 data scientists...", height=100)
-            ec1, ec2, _ = st.columns([1,1,2])
-            with ec1:
-                if st.button("📩 Send to Sales", key="send_ent", use_container_width=True):
-                    if not ent_company or not ent_msg:
-                        st.error("Please fill company name and message.")
-                    else:
-                        send_email(f"🏢 DataForge Enterprise Inquiry — {ent_company}",
-                            f"Company: {ent_company}\nName: {ent_name}\nEmail: {ent_email}\nSize: {ent_team}\nTime: {now_str()}\n\n{ent_msg}")
-                        log_activity(uemail_global, "enterprise_inquiry", f"Company: {ent_company}")
-                        st.session_state["show_contact_enterprise"] = False
-                        st.success("✅ Sent! Our team will contact you within 24 hours."); st.rerun()
-            with ec2:
-                if st.button("✕ Cancel", key="cancel_ent", use_container_width=True):
-                    st.session_state["show_contact_enterprise"] = False; st.rerun()
-
-        st.markdown(f'<div class="sub-glow-div"></div>', unsafe_allow_html=True)
-
-        # ── Feature Comparison Table ─────────────────────
-        st.markdown(f"""<div class="section-head"><div class="icon-wrap">📊</div><h3>Full Feature Comparison</h3></div>""", unsafe_allow_html=True)
-
-        comp_features = [
-            ("Datasets per month",          "3",           "Unlimited",    "Unlimited"),
-            ("ML Algorithms",               "5",           "15+",          "15+ Custom"),
-            ("Cross Validation Folds",      "3",           "Up to 10",     "Up to 10"),
-            ("EDA Charts",                  "Basic",       "Full Suite",   "Full Suite"),
-            ("Advanced Models (XGB/LGBM)",  "✗",           "✓",            "✓"),
-            ("Export Model (.pkl)",         "✗",           "✓",            "✓"),
-            ("Training History",            "Last 3 runs", "Full (50)",    "Unlimited"),
-            ("Priority Training Queue",     "✗",           "✓",            "✓ Dedicated"),
-            ("API Access",                  "✗",           "✗",            "✓"),
-            ("Team Members",                "1",           "1",            "Unlimited"),
-            ("White-label Reports",         "✗",           "✗",            "✓"),
-            ("Support",                     "Community",   "Email (48h)",  "Dedicated (2h)"),
-            ("SLA Uptime",                  "—",           "99%",          "99.9%"),
-        ]
-
-        header_bg  = f"{'rgba(255,255,255,0.04)' if T=='dark' else 'rgba(0,0,0,0.04)'}"
-        row_alt_bg = f"{'rgba(255,255,255,0.02)' if T=='dark' else 'rgba(0,0,0,0.02)'}"
-
-        table_html = f"""
-        <div style="border:1px solid {BORDER};border-radius:16px;overflow:hidden;margin-bottom:1rem">
-          <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;background:{header_bg};border-bottom:1px solid {BORDER}">
-            <div style="padding:.75rem 1rem;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{TEXT3}">Feature</div>
-            <div style="padding:.75rem 1rem;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{"#6b7280" if T=="dark" else TEXT3};text-align:center">🌱 Free{"  ✓" if current_plan=="free" else ""}</div>
-            <div style="padding:.75rem 1rem;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{ACCENT1};text-align:center">⚡ Pro{"  ✓" if current_plan=="pro" else ""}</div>
-            <div style="padding:.75rem 1rem;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{ACCENT3};text-align:center">🏢 Enterprise{"  ✓" if current_plan=="enterprise" else ""}</div>
-          </div>"""
-
-        for i, (feat, free_v, pro_v, ent_v) in enumerate(comp_features):
-            bg_row = row_alt_bg if i % 2 == 0 else "transparent"
-            def cell_color(v):
-                if v == "✗": return ACCENTR
-                if v.startswith("✓"): return ACCENT1
-                return TEXT1
-            table_html += f"""
-          <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;background:{bg_row};border-bottom:1px solid {BORDER}40">
-            <div style="padding:.6rem 1rem;font-size:.82rem;color:{TEXT2};font-weight:500">{feat}</div>
-            <div style="padding:.6rem 1rem;font-size:.82rem;color:{cell_color(free_v)};text-align:center;font-weight:{'700' if free_v in ('✓','✗') else '500'}">{free_v}</div>
-            <div style="padding:.6rem 1rem;font-size:.82rem;color:{cell_color(pro_v)};text-align:center;font-weight:{'700' if pro_v.startswith('✓') or pro_v=='✗' else '600'}">{pro_v}</div>
-            <div style="padding:.6rem 1rem;font-size:.82rem;color:{cell_color(ent_v)};text-align:center;font-weight:{'700' if ent_v.startswith('✓') or ent_v=='✗' else '600'}">{ent_v}</div>
-          </div>"""
-        table_html += "</div>"
-        st.markdown(table_html, unsafe_allow_html=True)
-
-        # ── FAQ ──────────────────────────────────────────
-        st.markdown(f"""<div class="section-head"><div class="icon-wrap">❓</div><h3>Frequently Asked Questions</h3></div>""", unsafe_allow_html=True)
-        faqs = [
-            ("Can I upgrade or downgrade anytime?", "Yes! You can change your plan at any time. Upgrades are instant (after payment verification). Downgrades take effect at the next billing cycle."),
-            ("Is there a free trial for Pro?", "New users get 3 free dataset trainings per month to explore the platform. After that, upgrade to Pro for unlimited access."),
-            ("How does JazzCash payment work?", f"Send payment to {JAZZCASH_NUMBER} ({JAZZCASH_NAME}), then submit the Transaction ID in the form above. We verify and activate your plan within 24 hours."),
-            ("What happens to my data if I downgrade?", "Your data is always safe. If you exceed Free plan limits, older training history is archived (not deleted) and accessible when you upgrade again."),
-            ("Do you offer student or nonprofit discounts?", "Yes! Contact us at shayan.corner@gmail.com with proof of eligibility for 50% off Pro."),
-        ]
-        for q, a in faqs:
-            with st.expander(f"  {q}"):
-                st.markdown(f'<div style="font-size:.875rem;color:{TEXT2};line-height:1.7;padding:.25rem 0">{a}</div>', unsafe_allow_html=True)
-
-        st.markdown(f"""
-        <div class="money-back-anim" style="text-align:center;margin:2rem 0 1rem;padding:1.5rem;background:{"rgba(251,191,36,0.06)" if T=="dark" else "rgba(251,191,36,0.08)"};border:1px solid {"rgba(251,191,36,0.25)" if T=="dark" else "rgba(251,191,36,0.35)"};border-radius:16px">
-          <div style="font-size:2rem;margin-bottom:.4rem">🛡️</div>
-          <div style="font-size:1rem;font-weight:800;color:{ACCENTY};margin-bottom:.3rem">30-Day Money-Back Guarantee</div>
-          <div style="font-size:.85rem;color:{TEXT2};max-width:480px;margin:0 auto">Not satisfied? Get a full refund within 30 days, no questions asked. Email us at <span style="color:{ACCENT1}">shayan.corner@gmail.com</span></div>
-        </div>
-        """, unsafe_allow_html=True)
 
 # ═══════════════════════════
 # WELCOME SCREEN
