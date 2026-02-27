@@ -410,12 +410,12 @@ if not st.session_state.authenticated:
         mode_col1, mode_col2 = st.columns(2)
         with mode_col1:
             signin_active = st.session_state.auth_mode == "signin"
-            if st.button("🔑 Sign In", use_container_width=True, key="tab_signin",
+            if st.button("🔑 Sign In", width='stretch', key="tab_signin",
                          type="primary" if signin_active else "secondary"):
                 st.session_state.auth_mode = "signin"; st.rerun()
         with mode_col2:
             signup_active = st.session_state.auth_mode == "signup"
-            if st.button("✨ Create Account", use_container_width=True, key="tab_signup",
+            if st.button("✨ Create Account", width='stretch', key="tab_signup",
                          type="primary" if signup_active else "secondary"):
                 st.session_state.auth_mode = "signup"; st.rerun()
 
@@ -427,7 +427,7 @@ if not st.session_state.authenticated:
             su_pass  = st.text_input("Password", type="password", placeholder="Create a strong password", key="su_pass")
             su_pass2 = st.text_input("Confirm Password", type="password", placeholder="Repeat your password", key="su_pass2")
 
-            if st.button("🚀 Create Account & Enter Studio", use_container_width=True, key="do_signup"):
+            if st.button("🚀 Create Account & Enter Studio", width='stretch', key="do_signup"):
                 if not su_name or not su_email or not su_pass:
                     st.error("❌ Please fill in all fields.")
                 elif "@" not in su_email:
@@ -467,7 +467,7 @@ if not st.session_state.authenticated:
             si_email = st.text_input("Email Address", placeholder="your@email.com", key="si_email")
             si_pass  = st.text_input("Password", type="password", placeholder="Enter your password", key="si_pass")
 
-            if st.button("⚡ Sign In & Launch Studio", use_container_width=True, key="do_signin"):
+            if st.button("⚡ Sign In & Launch Studio", width='stretch', key="do_signin"):
                 if not si_email or not si_pass:
                     st.error("❌ Please enter your email and password.")
                 elif "@" not in si_email:
@@ -590,7 +590,7 @@ with st.sidebar:
     st.markdown(f'<div class="sidebar-title">🎯 Sample Datasets</div>', unsafe_allow_html=True)
     sample = st.selectbox("Pick one", ["— choose —","🚢 Titanic","💎 Diamonds","🌸 Iris"], label_visibility="collapsed")
     if sample != "— choose —":
-        if st.button("Load Sample →", use_container_width=True, key="load_sample"):
+        if st.button("Load Sample →", width='stretch', key="load_sample"):
             try:
                 urls = {
                     "🚢 Titanic":  ("https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv","Survived"),
@@ -648,7 +648,7 @@ with st.sidebar:
     st.markdown(f'<div class="sidebar-section"><span class="insight-chip">PyCaret</span><span class="insight-chip">Plotly</span><span class="insight-chip">Pandas</span><span class="insight-chip">Streamlit</span></div>', unsafe_allow_html=True)
 
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-    if st.button("🚪 Sign Out", use_container_width=True, key="sidebar_logout"):
+    if st.button("🚪 Sign Out", width='stretch', key="sidebar_logout"):
         tok = st.session_state.get("login_token")
         if tok:
             delete_token(tok)
@@ -732,21 +732,21 @@ if st.session_state.data is not None:
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">⚡</div><h3>Quick Actions</h3></div>""", unsafe_allow_html=True)
         qa1, qa2, qa3, qa4 = st.columns(4)
         with qa1:
-            if st.button("🗑️ Drop Duplicates", use_container_width=True, key="drop_dups"):
+            if st.button("🗑️ Drop Duplicates", width='stretch', key="drop_dups"):
                 before = len(df)
                 st.session_state.data = df.drop_duplicates().reset_index(drop=True)
                 st.success(f"Removed {before - len(st.session_state.data)} duplicates!"); st.rerun()
         with qa2:
-            if st.button("🧹 Drop All-Null Cols", use_container_width=True, key="drop_null_cols"):
+            if st.button("🧹 Drop All-Null Cols", width='stretch', key="drop_null_cols"):
                 before = len(df.columns)
                 st.session_state.data = df.dropna(axis=1, how='all')
                 st.success(f"Removed {before - len(st.session_state.data.columns)} empty columns!"); st.rerun()
         with qa3:
-            if st.button("📊 Show Data Types", use_container_width=True, key="show_dtypes"):
-                st.dataframe(df.dtypes.reset_index().rename(columns={"index":"Column",0:"Type"}), use_container_width=True)
+            if st.button("📊 Show Data Types", width='stretch', key="show_dtypes"):
+                st.dataframe(df.dtypes.reset_index().rename(columns={"index":"Column",0:"Type"}), width='stretch')
         with qa4:
             st.download_button("📥 Download CSV", df.to_csv(index=False),
-                               f"dataset_{pd.Timestamp.now().strftime('%Y%m%d')}.csv", "text/csv", use_container_width=True)
+                               f"dataset_{pd.Timestamp.now().strftime('%Y%m%d')}.csv", "text/csv", width='stretch')
 
         st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">🔍</div><h3>Data Preview</h3></div>""", unsafe_allow_html=True)
@@ -754,9 +754,9 @@ if st.session_state.data is not None:
         show_rows = st.slider("Rows to show", 5, 100, 20, key="preview_rows")
         if search.strip():
             cols_f = [c.strip() for c in search.split(",") if c.strip() in df.columns]
-            st.dataframe((df[cols_f] if cols_f else df).head(show_rows), use_container_width=True)
+            st.dataframe((df[cols_f] if cols_f else df).head(show_rows), width='stretch')
         else:
-            st.dataframe(df.head(show_rows), use_container_width=True)
+            st.dataframe(df.head(show_rows), width='stretch')
 
         st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
@@ -766,10 +766,10 @@ if st.session_state.data is not None:
                                 "Non-Null":df.count().values,
                                 "Null %":((df.isnull().sum()/len(df))*100).round(1).astype(str)+"%",
                                 "Unique":df.nunique().values})
-            st.dataframe(ci, use_container_width=True, height=300)
+            st.dataframe(ci, width='stretch', height=300)
         with c2:
             st.markdown(f"""<div class="section-head"><div class="icon-wrap">📊</div><h3>Statistical Summary</h3></div>""", unsafe_allow_html=True)
-            st.dataframe(df.describe().round(3), use_container_width=True, height=300)
+            st.dataframe(df.describe().round(3), width='stretch', height=300)
 
     # ═══════════════════════════
     # TAB 2 — EDA & INSIGHTS
@@ -802,7 +802,7 @@ if st.session_state.data is not None:
                     fig = px.bar(x=vc.index, y=vc.values, color=vc.values, color_continuous_scale=[ACCENT2, ACCENT1], template=CHART_TEMPLATE, title=f"Top values · {col_pick}")
                     fig.update_layout(showlegend=False, coloraxis_showscale=False)
                 fig.update_layout(**chart_layout(height=340))
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
             with cv2:
                 s = df[col_pick]
@@ -827,7 +827,7 @@ if st.session_state.data is not None:
                     hovertemplate="%{x} × %{y}: <b>%{z}</b><extra></extra>",
                 ))
                 fig_h.update_layout(**chart_layout(height=460))
-                st.plotly_chart(fig_h, use_container_width=True)
+                st.plotly_chart(fig_h, width='stretch')
 
                 st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
                 st.markdown("#### 🔵 Scatter Plot Builder")
@@ -842,7 +842,7 @@ if st.session_state.data is not None:
                                     color_discrete_sequence=[ACCENT1, ACCENT2, ACCENT3, ACCENTY, ACCENTR])
                 fig_sc.update_traces(marker=dict(size=6))
                 fig_sc.update_layout(**chart_layout(height=420))
-                st.plotly_chart(fig_sc, use_container_width=True)
+                st.plotly_chart(fig_sc, width='stretch')
 
             if len(num_cols) >= 1 and len(cat_cols) >= 1:
                 st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
@@ -854,7 +854,7 @@ if st.session_state.data is not None:
                                  color_discrete_sequence=[ACCENT1, ACCENT2, ACCENT3, ACCENTY, ACCENTR],
                                  title=f"{bnum} by {bcat}")
                 fig_box.update_layout(**chart_layout(height=420, showlegend=False))
-                st.plotly_chart(fig_box, use_container_width=True)
+                st.plotly_chart(fig_box, width='stretch')
 
                 st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
                 st.markdown("#### 🕳️ Missing Values per Column")
@@ -865,7 +865,7 @@ if st.session_state.data is not None:
                                       color_continuous_scale=[ACCENT1, ACCENTY, ACCENTR],
                                       template=CHART_TEMPLATE, labels={"x":"Column","y":"Missing Count"}, title="Missing Value Count per Column")
                     fig_miss.update_layout(**chart_layout(height=340, showlegend=False, coloraxis_showscale=False))
-                    st.plotly_chart(fig_miss, use_container_width=True)
+                    st.plotly_chart(fig_miss, width='stretch')
                 else:
                     st.success("✅ No missing values found in this dataset!")
 
@@ -925,10 +925,10 @@ if st.session_state.data is not None:
 
             col_btn1, col_btn2 = st.columns([3, 1])
             with col_btn1:
-                train_clicked = st.button("🚀 Launch Training", use_container_width=True)
+                train_clicked = st.button("🚀 Launch Training", width='stretch')
             with col_btn2:
                 if st.session_state.results is not None:
-                    if st.button("🔄 Reset Results", use_container_width=True):
+                    if st.button("🔄 Reset Results", width='stretch'):
                         st.session_state.results = None
                         st.session_state.best_model = None
                         st.session_state.training_time = None; st.rerun()
@@ -1045,10 +1045,10 @@ if st.session_state.data is not None:
             ex1, ex2, ex3 = st.columns(3)
             with ex1:
                 st.download_button("📥 Export Results CSV", res_df.to_csv(index=False),
-                                   f"results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv", "text/csv", use_container_width=True)
+                                   f"results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv", "text/csv", width='stretch')
             with ex2:
                 model_info = f"Best Model: {best_name}\n{metric_name}: {top_score:.4f}\nFolds: {folds_used}"
-                st.download_button("📋 Export Model Info", model_info, "model_info.txt", "text/plain", use_container_width=True)
+                st.download_button("📋 Export Model Info", model_info, "model_info.txt", "text/plain", width='stretch')
             with ex3:
                 st.info(f"💾 Saved: `best_model.pkl`")
 
@@ -1058,7 +1058,7 @@ if st.session_state.data is not None:
                       .background_gradient(cmap="RdYlGn", subset=num_res)
                       .format({c: "{:.4f}" for c in num_res})
                       .set_properties(**{"font-family":"JetBrains Mono,monospace","font-size":"12px"}))
-            st.dataframe(styled, use_container_width=True, height=360)
+            st.dataframe(styled, width='stretch', height=360)
 
             st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
             st.markdown(f"""<div class="section-head"><div class="icon-wrap">📊</div><h3>Performance Visuals</h3></div>""", unsafe_allow_html=True)
@@ -1072,7 +1072,7 @@ if st.session_state.data is not None:
                     text=top6[metric_name].round(4), textposition="inside",
                     textfont=dict(size=10, color="white", family="JetBrains Mono")))
                 fig_b.update_layout(**chart_layout(height=360, title=f"Top Models · {metric_name}", yaxis=dict(autorange="reversed")))
-                st.plotly_chart(fig_b, use_container_width=True)
+                st.plotly_chart(fig_b, width='stretch')
 
             with ch2:
                 rc = num_res[:6]
@@ -1087,7 +1087,7 @@ if st.session_state.data is not None:
                 fig_r.update_layout(**chart_layout(height=360, showlegend=False, title="Best Model · Metrics Radar",
                     polar=dict(bgcolor=CHART_PAPER, radialaxis=dict(visible=True, range=[0,1], gridcolor=BORDER),
                                angularaxis=dict(gridcolor=BORDER))))
-                st.plotly_chart(fig_r, use_container_width=True)
+                st.plotly_chart(fig_r, width='stretch')
 
             with ch3:
                 if len(num_res) >= 2:
@@ -1104,7 +1104,7 @@ if st.session_state.data is not None:
                             hovertemplate=f"<b>{row[model_col]}</b><br>{num_res[0]}: {row[num_res[0]]:.4f}<br>{num_res[1]}: {row[num_res[1]]:.4f}<extra></extra>"))
                     fig_s.update_layout(**chart_layout(height=360, showlegend=False, title="Score Scatter",
                                                        xaxis_title=num_res[0], yaxis_title=num_res[1]))
-                    st.plotly_chart(fig_s, use_container_width=True)
+                    st.plotly_chart(fig_s, width='stretch')
                 else:
                     st.info("Need 2+ numeric metrics for scatter.")
 
@@ -1223,7 +1223,7 @@ if st.session_state.data is not None:
                 fig_hist.add_hline(y=best_s, line_dash="dot", line_color=ACCENTY, line_width=1.5,
                     annotation_text=f"Best: {best_s:.4f}", annotation_font_color=ACCENTY, annotation_font_size=10)
                 fig_hist.update_layout(**chart_layout(height=300, title="Score per Training Run", xaxis_title="Run #", yaxis_title="Best Score", showlegend=False))
-                st.plotly_chart(fig_hist, use_container_width=True)
+                st.plotly_chart(fig_hist, width='stretch')
 
         with hist_col2:
             st.markdown(f"""<div class="section-head"><div class="icon-wrap">📋</div><h3>Activity Log</h3></div>""", unsafe_allow_html=True)
@@ -1255,12 +1255,12 @@ if st.session_state.data is not None:
             tlog_df = pd.DataFrame(uhist_h.get("training_log", []))
             if not tlog_df.empty:
                 st.download_button("📥 Export Training History CSV", tlog_df.to_csv(index=False),
-                                   f"training_history_{uemail_global[:10]}.csv", "text/csv", use_container_width=True)
+                                   f"training_history_{uemail_global[:10]}.csv", "text/csv", width='stretch')
         with exp2:
             alog_df = pd.DataFrame(uhist_h.get("activity_log", []))
             if not alog_df.empty:
                 st.download_button("📥 Export Activity Log CSV", alog_df.to_csv(index=False),
-                                   f"activity_log_{uemail_global[:10]}.csv", "text/csv", use_container_width=True)
+                                   f"activity_log_{uemail_global[:10]}.csv", "text/csv", width='stretch')
 
 # ═══════════════════════════
 # WELCOME SCREEN
