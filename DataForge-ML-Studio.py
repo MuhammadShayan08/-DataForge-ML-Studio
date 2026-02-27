@@ -5,12 +5,16 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from pycaret.classification import (
-    setup as clf_setup, compare_models as clf_compare,
-    pull as clf_pull, save_model as clf_save,
+    setup as clf_setup, 
+    compare_models as clf_compare,
+    pull as clf_pull, 
+    save_model as clf_save,
 )
 from pycaret.regression import (
-    setup as reg_setup, compare_models as reg_compare,
-    pull as reg_pull, save_model as reg_save,
+    setup as reg_setup, 
+    compare_models as reg_compare,
+    pull as reg_pull, 
+    save_model as reg_save,
 )
 import warnings, time, io, smtplib, json, os, hashlib, secrets
 from email.mime.text import MIMEText
