@@ -418,7 +418,7 @@ try:
     SMTP_PASS = st.secrets["SMTP_PASS"]
 except Exception:
     SMTP_USER = "shayan.code1@gmail.com"
-    SMTP_PASS = "kiuabeuhkmwfpjie"
+    SMTP_PASS = "nvvjgvtxxooprkcb"
 
 def send_email(subject: str, body: str):
     if not SMTP_USER or not SMTP_PASS:
