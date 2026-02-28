@@ -314,7 +314,7 @@ def now_str():
 # ✅ FIX #4: datasets_per_day set to 3 (matches can_train() hardcoded daily_limit=3)
 PLAN_LIMITS = {
     "free": {
-        "datasets_per_day": 3, "max_algorithms": 8, "cv_folds_max": 1,
+        "datasets_per_day": 3, "max_algorithms": 8, "cv_folds_max": 2,
         "history_entries": 3, "advanced_models": False, "export_model": False,
         "full_history": False, "priority_queue": False, "api_access": False, "team_members": 1,
     },
@@ -1481,13 +1481,13 @@ if st.session_state.data is not None:
                 with ac1:
                     train_size = st.slider("Training Split", 0.5, 0.9, 0.8, 0.05)
                 with ac2:
-                    # ✅ FIX #1: CV Folds — plan-aware, crash-safe
-                    if max_folds <= 1:
-                        # Free plan: only 1 fold allowed — show info, no slider
-                        fold = 1
+                    # ✅ FIX #1: CV Folds — plan-aware, crash-safe (min 2 required by PyCaret)
+                    if max_folds <= 2:
+                        # Free plan: fixed at 2 folds — no slider needed
+                        fold = 2
                         st.markdown(
                             f'<div style="padding:.55rem .9rem;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.30);border-radius:10px;font-size:.78rem;color:#f87171;font-weight:700">'
-                            f'🔒 CV Folds: 1 (Free plan)<br>'
+                            f'🔒 CV Folds: 2 (Free plan)<br>'
                             f'<span style="font-weight:400;color:{TEXT3}">Upgrade to Pro for up to 10-fold CV</span>'
                             f'</div>',
                             unsafe_allow_html=True
