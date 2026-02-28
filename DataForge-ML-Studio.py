@@ -998,6 +998,178 @@ def plan_gate(feature_key: str, upgrade_msg: str = None):
     return False
 
 # ─────────────────────────────────────────────
+#  ADMIN PANEL — always accessible, no dataset needed
+# ─────────────────────────────────────────────
+if is_admin:
+    with st.expander("🔐 Admin Panel", expanded=False):
+        all_payments  = load_json(PAYMENTS_FILE)
+        all_users_db  = load_json(USERS_FILE)
+        all_history   = load_json(HISTORY_FILE)
+
+        pending_pays  = [p for p in all_payments.values() if p.get("status")=="pending"]
+        approved_pays = [p for p in all_payments.values() if p.get("status")=="approved"]
+        rejected_pays = [p for p in all_payments.values() if p.get("status")=="rejected"]
+        total_revenue = sum(p.get("amount",0) for p in approved_pays)
+
+        # Header
+        st.markdown(f'<div style="background:linear-gradient(135deg,rgba(192,132,252,0.10),rgba(96,165,250,0.08));border:1px solid rgba(192,132,252,0.35);border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1rem;display:flex;align-items:center;gap:1rem"><span style="font-size:2rem">🔐</span><div><div style="font-size:1.1rem;font-weight:900;color:#c084fc">Admin Control Panel</div><div style="font-size:.8rem;color:{TEXT2}">{uname_global} ({uemail_global}) · Admin Access</div></div></div>', unsafe_allow_html=True)
+
+        # Stats
+        sa1,sa2,sa3,sa4,sa5 = st.columns(5)
+        for col,lbl,val,sub in [
+            (sa1,"Total Users",    len(all_users_db),          "registered"),
+            (sa2,"⏳ Pending",     len(pending_pays),          "need approval"),
+            (sa3,"✅ Approved",    len(approved_pays),         "payments"),
+            (sa4,"❌ Rejected",    len(rejected_pays),         "payments"),
+            (sa5,"Revenue (PKR)", f"{total_revenue:,.0f}",    "collected"),
+        ]:
+            with col:
+                st.metric(lbl, val, sub)
+
+        adm1, adm2, adm3, adm4 = st.tabs([
+            f"⏳ Pending ({len(pending_pays)})",
+            f"✅ Approved ({len(approved_pays)})",
+            "👥 All Users",
+            "📧 Email Log"
+        ])
+
+        # ── PENDING ──
+        with adm1:
+            if not pending_pays:
+                st.success("✨ No pending payments — all caught up!")
+            for pay in sorted(pending_pays, key=lambda x: x.get("submitted_at",""), reverse=True):
+                plan_c = PRICING.get(pay.get("plan",""),{}).get("color",TEXT2)
+                pid    = pay.get("id","")
+                h  = f'<div style="background:{CARD_BG};border:2px solid rgba(251,191,36,0.35);border-radius:16px;padding:1.25rem;margin-bottom:.75rem;position:relative;overflow:hidden">'
+                h += f'<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#fbbf24,{plan_c})"></div>'
+                h += f'<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.2rem">'
+                h += f'<div style="flex:1;min-width:200px">'
+                h += f'<div style="font-size:.95rem;font-weight:800;color:{TEXT1}">{pay.get("name","?")}</div>'
+                h += f'<div style="font-size:.72rem;color:{TEXT3};margin-bottom:.5rem">{pay.get("email","?")}</div>'
+                h += f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem">'
+                h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Plan</div><div style="font-weight:800;color:{plan_c}">{pay.get("plan","?").upper()}</div></div>'
+                h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Amount</div><div style="font-weight:800;color:#fbbf24">PKR {pay.get("amount",0):,.0f}</div></div>'
+                h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Method</div><div style="font-weight:600;color:{TEXT1}">{pay.get("payment_method","?").replace("_"," ").title()}</div></div>'
+                h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Billing</div><div style="font-weight:600;color:{TEXT1}">{pay.get("billing","?").title()}</div></div>'
+                h += f'</div></div>'
+                h += f'<div style="flex:1;min-width:180px">'
+                h += f'<div style="background:{BG3};border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3};margin-bottom:.2rem">Transaction ID</div><div style="font-size:.9rem;font-weight:700;color:#4ade80;font-family:monospace;word-break:break-all">{pay.get("txn_id","?")}</div></div>'
+                h += f'<div style="font-size:.7rem;color:{TEXT3}">📅 {pay.get("submitted_at","")[:16]}</div>'
+                h += f'<div style="font-size:.65rem;color:{TEXT3};font-family:monospace">{pid}</div>'
+                h += f'</div></div></div>'
+                st.markdown(h, unsafe_allow_html=True)
+
+                bc1, bc2, bc3 = st.columns([1,1,2])
+                with bc1:
+                    if st.button("✅ Approve", key=f"adm_approve_{pid}"):
+                        if approve_payment(pid):
+                            log_activity(pay.get("email",""), "plan_approved", f"{pay.get('plan','')} activated by admin")
+                            st.success(f"✅ {pay.get('name','?')} upgraded to {pay.get('plan','').upper()}!")
+                            st.rerun()
+                with bc2:
+                    if st.button("❌ Reject", key=f"adm_reject_{pid}"):
+                        pays_rj = load_json(PAYMENTS_FILE)
+                        if pid in pays_rj:
+                            pays_rj[pid]["status"] = "rejected"
+                            pays_rj[pid]["processed_at"] = now_str()
+                            save_json(PAYMENTS_FILE, pays_rj)
+                            log_activity(pay.get("email",""), "plan_rejected", f"rejected by admin")
+                            st.warning("❌ Payment rejected.")
+                            st.rerun()
+                with bc3:
+                    note_val = st.text_input("Admin note", placeholder="e.g. Txn verified ✓", key=f"adm_note_{pid}", label_visibility="collapsed")
+                    if note_val:
+                        pays_n = load_json(PAYMENTS_FILE)
+                        if pid in pays_n:
+                            pays_n[pid]["admin_note"] = note_val
+                            save_json(PAYMENTS_FILE, pays_n)
+                st.markdown("---")
+
+        # ── APPROVED ──
+        with adm2:
+            if not approved_pays:
+                st.info("No approved payments yet.")
+            else:
+                st.metric("Total Revenue", f"PKR {total_revenue:,.0f}", f"{len(approved_pays)} payments")
+                for pay in sorted(approved_pays, key=lambda x: x.get("processed_at",""), reverse=True):
+                    plan_c = PRICING.get(pay.get("plan",""),{}).get("color",TEXT2)
+                    h  = f'<div style="background:{CARD_BG};border:1px solid rgba(74,222,128,0.25);border-radius:12px;padding:1rem 1.25rem;margin-bottom:.5rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">'
+                    h += f'<span style="font-size:1.3rem">✅</span>'
+                    h += f'<div style="flex:1;min-width:150px"><div style="font-weight:700;color:{TEXT1}">{pay.get("name","?")}</div><div style="font-size:.72rem;color:{TEXT3}">{pay.get("email","?")}</div></div>'
+                    h += f'<span style="font-size:.7rem;font-weight:800;color:{plan_c};background:{plan_c}22;border:1px solid {plan_c}55;border-radius:6px;padding:.2rem .55rem">{pay.get("plan","?").upper()}</span>'
+                    h += f'<div style="font-weight:800;color:#fbbf24;font-family:monospace">PKR {pay.get("amount",0):,.0f}</div>'
+                    h += f'<div style="font-size:.7rem;color:{TEXT3}">✓ {pay.get("processed_at","")[:10]}</div>'
+                    h += f'<div style="font-size:.65rem;color:{TEXT3};font-family:monospace">{pay.get("id","")}</div>'
+                    h += '</div>'
+                    st.markdown(h, unsafe_allow_html=True)
+
+        # ── ALL USERS ──
+        with adm3:
+            user_search = st.text_input("🔍 Search by name or email", key="adm_user_search")
+            for em, ud in sorted(all_users_db.items(), key=lambda x: x[1].get("signup_date",""), reverse=True):
+                if user_search and user_search.lower() not in em.lower() and user_search.lower() not in ud.get("name","").lower():
+                    continue
+                u_plan  = get_user_plan(em)
+                u_pc    = PLAN_COLORS.get(u_plan,"#6b7280")
+                u_pi    = PLAN_ICONS.get(u_plan,"🌱")
+                u_hist  = all_history.get(em,{})
+                h  = f'<div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:12px;padding:.9rem 1.1rem;margin-bottom:.4rem;display:flex;align-items:center;gap:.9rem;flex-wrap:wrap">'
+                h += f'<div style="width:34px;height:34px;border-radius:50%;background:{u_pc}20;border:2px solid {u_pc}50;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0">{u_pi}</div>'
+                h += f'<div style="flex:1;min-width:160px"><div style="font-size:.9rem;font-weight:700;color:{TEXT1}">{ud.get("name","?")}</div><div style="font-size:.7rem;color:{TEXT3}">{em}</div></div>'
+                h += f'<span style="font-size:.7rem;font-weight:800;color:{u_pc};background:{u_pc}18;border:1px solid {u_pc}44;border-radius:6px;padding:.2rem .55rem">{u_plan.upper()}</span>'
+                h += f'<div style="text-align:center;min-width:45px"><div style="font-size:1rem;font-weight:900;color:#60a5fa">{u_hist.get("login_count",0)}</div><div style="font-size:.6rem;color:{TEXT3}">logins</div></div>'
+                h += f'<div style="font-size:.7rem;color:{TEXT3}">Joined: {ud.get("signup_date","")[:10]}</div>'
+                h += '</div>'
+                st.markdown(h, unsafe_allow_html=True)
+                with st.expander(f"⚙️ Manage {ud.get('name','?')}"):
+                    mc1,mc2,mc3 = st.columns(3)
+                    with mc1:
+                        np_ = st.selectbox("Set Plan", ["free","pro","enterprise"], index=["free","pro","enterprise"].index(u_plan), key=f"adm_plan_{em}")
+                    with mc2:
+                        nm_ = st.number_input("Months", 1, 24, 1, key=f"adm_months_{em}")
+                    with mc3:
+                        st.write("")
+                        if st.button("💾 Apply", key=f"adm_apply_{em}"):
+                            upgrade_user_plan(em, np_, int(nm_))
+                            log_activity(em, "plan_changed_by_admin", f"Set to {np_} for {nm_}mo")
+                            st.success(f"✅ Done!"); st.rerun()
+
+        # ── EMAIL LOG ──
+        with adm4:
+            email_log = load_json("dataforge_email_log.json")
+            if not email_log:
+                st.info("No email events logged yet.")
+            else:
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    st.download_button("📥 Export CSV",
+                        pd.DataFrame([{"ts":ts,**{k:str(v)[:80] for k,v in e.items()}} for ts,e in sorted(email_log.items(),reverse=True)[:50]]).to_csv(index=False),
+                        "email_log.csv","text/csv", key="adm_dl_email")
+                with ec2:
+                    if st.button("🗑️ Clear Log", key="adm_clear_email"):
+                        save_json("dataforge_email_log.json",{})
+                        st.success("Cleared!"); st.rerun()
+
+                for ts, entry in sorted(email_log.items(), reverse=True)[:50]:
+                    has_err = "error" in entry
+                    is_ok   = entry.get("status") == "sent_ok"
+                    icon    = "✅" if is_ok else ("❌" if has_err else "📧")
+                    col     = "#4ade80" if is_ok else ("#f87171" if has_err else "#fbbf24")
+                    bdr     = "rgba(248,113,113,0.30)" if has_err else BORDER
+                    h  = f'<div style="background:{CARD_BG};border:1px solid {bdr};border-radius:10px;padding:.75rem 1rem;margin-bottom:.35rem;display:flex;gap:.75rem;align-items:flex-start">'
+                    h += f'<span style="font-size:1rem;flex-shrink:0">{icon}</span>'
+                    h += f'<div style="flex:1;min-width:0"><div style="font-size:.8rem;font-weight:700;color:{col};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{entry.get("subject","(no subject)")}</div>'
+                    h += f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.1rem">{ts}</div>'
+                    if has_err:
+                        h += f'<div style="font-size:.72rem;color:#f87171;margin-top:.25rem;background:rgba(248,113,113,0.07);border-radius:6px;padding:.25rem .5rem">Error: {entry.get("error","")}</div>'
+                    if entry.get("note"):
+                        h += f'<div style="font-size:.7rem;color:#fbbf24;margin-top:.2rem;background:rgba(251,191,36,0.07);border-radius:6px;padding:.25rem .5rem">{entry["note"][:200]}</div>'
+                    h += '</div></div>'
+                    st.markdown(h, unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ─────────────────────────────────────────────
 #  MAIN TABS
 # ─────────────────────────────────────────────
 if st.session_state.data is not None:
@@ -1008,16 +1180,15 @@ if st.session_state.data is not None:
     cat_cols = df.select_dtypes(include=["object","category"]).columns.tolist()
 
     if is_admin:
-        tab1, tab2, tab3, tab4, tab5, tab6, tab_admin = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "📊  Data Explorer", "🧬  EDA & Insights", "⚙️  Train Model",
-            "🏆  Results", "📜  My History", "💳  Upgrade", "🔐  Admin"
+            "🏆  Results", "📜  My History", "💳  Upgrade"
         ])
     else:
         tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "📊  Data Explorer", "🧬  EDA & Insights", "⚙️  Train Model",
             "🏆  Results", "📜  My History", "💳  Upgrade"
         ])
-        tab_admin = None
 
     # ═══════════════════════════
     # TAB 1 — DATA EXPLORER
@@ -1782,10 +1953,9 @@ You'll see your plan update automatically on next login.
             </div>""", unsafe_allow_html=True)
         else:
             for pay in user_payments:
-                status      = pay.get("status", "pending")
+                status      = pay.get("status","pending")
                 status_icon = "⏳" if status=="pending" else ("✅" if status=="approved" else "❌")
-                status_lbl  = status.upper()
-                plan_c      = PRICING.get(pay.get("plan",""), {}).get("color", TEXT2)
+                plan_c      = PRICING.get(pay.get("plan",""),{}).get("color",TEXT2)
                 pay_plan    = pay.get("plan","?").upper()
                 pay_billing = pay.get("billing","monthly").title()
                 pay_amount  = f"{pay.get('amount',0):,.0f}"
@@ -1793,67 +1963,33 @@ You'll see your plan update automatically on next login.
                 pay_txn     = pay.get("txn_id","?")
                 pay_date    = pay.get("submitted_at","")[:16]
                 pay_id_disp = pay.get("id","")
-
-                # Status badge inline styles (no CSS class — Streamlit strips unknown classes)
-                if status == "pending":
-                    badge_bg  = "rgba(251,191,36,0.12)"
-                    badge_bdr = "rgba(251,191,36,0.40)"
-                    badge_col = "#fbbf24"
-                elif status == "approved":
-                    badge_bg  = "rgba(74,222,128,0.12)"
-                    badge_bdr = "rgba(74,222,128,0.40)"
-                    badge_col = "#4ade80"
-                else:
-                    badge_bg  = "rgba(248,113,113,0.12)"
-                    badge_bdr = "rgba(248,113,113,0.40)"
-                    badge_col = "#f87171"
-
-                # Optional blocks — pre-built as plain strings (no nested f-strings)
-                approved_html = ""
+                badge_bg,badge_bdr,badge_col = (
+                    ("rgba(251,191,36,0.12)","rgba(251,191,36,0.40)","#fbbf24") if status=="pending" else
+                    ("rgba(74,222,128,0.12)","rgba(74,222,128,0.40)","#4ade80") if status=="approved" else
+                    ("rgba(248,113,113,0.12)","rgba(248,113,113,0.40)","#f87171")
+                )
+                # Build card as concatenated single-line strings — avoids Streamlit markdown/code-block parsing
+                h  = f'<div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:16px;padding:1.25rem;margin-bottom:.75rem;position:relative;overflow:hidden">'
+                h += f'<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,{plan_c},{badge_col})"></div>'
+                h += f'<div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-top:.2rem">'
+                h += f'<div style="flex:1;min-width:180px">'
+                h += f'<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem">'
+                h += f'<span style="font-size:.7rem;font-weight:800;color:{plan_c};background:{plan_c}22;border:1px solid {plan_c}55;border-radius:6px;padding:.15rem .5rem">{pay_plan}</span>'
+                h += f'<span style="font-size:.7rem;color:{TEXT3}">{pay_billing} billing</span></div>'
+                h += f'<div style="font-size:.88rem;font-weight:700;color:{TEXT1}">PKR {pay_amount} <span style="font-size:.75rem;font-weight:400;color:{TEXT2}">via {pay_method}</span></div>'
+                h += f'<div style="font-size:.7rem;color:{TEXT3};margin-top:.2rem;font-family:monospace">Txn: {pay_txn}</div>'
+                h += f'<div style="font-size:.67rem;color:{TEXT3};margin-top:.1rem">{pay_date}</div>'
+                h += f'</div>'
+                h += f'<div style="display:flex;flex-direction:column;align-items:flex-end;gap:.35rem">'
+                h += f'<span style="display:inline-flex;align-items:center;gap:.35rem;padding:.35rem .85rem;border-radius:999px;font-size:.77rem;font-weight:800;background:{badge_bg};border:1px solid {badge_bdr};color:{badge_col}">{status_icon} {status.upper()}</span>'
                 if pay.get("processed_at"):
-                    proc_date     = pay.get("processed_at","")[:16]
-                    approved_html = f'<div style="font-size:.68rem;color:#6b7280;margin-top:.3rem">Approved: {proc_date}</div>'
-
-                note_html = ""
+                    h += f'<div style="font-size:.67rem;color:#6b7280">✓ Approved: {pay["processed_at"][:16]}</div>'
+                h += f'<div style="font-size:.64rem;color:{TEXT3};font-family:monospace">{pay_id_disp}</div>'
+                h += f'</div></div>'
                 if pay.get("admin_note"):
-                    admin_note_txt = pay.get("admin_note","")
-                    note_html      = f'<div style="margin-top:.6rem;font-size:.75rem;color:#9ca3af;background:#1c1c1c;border-radius:8px;padding:.4rem .75rem">📝 {admin_note_txt}</div>'
-
-                st.markdown(f"""
-                <div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:16px;
-                            padding:1.25rem;margin-bottom:.75rem;overflow:hidden;position:relative">
-                  <div style="position:absolute;top:0;left:0;right:0;height:3px;
-                              background:linear-gradient(90deg,{plan_c},{badge_col})"></div>
-                  <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-top:.25rem">
-                    <div style="flex:1;min-width:200px">
-                      <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem">
-                        <span style="font-size:.72rem;font-weight:800;color:{plan_c};
-                                     background:{plan_c}22;border:1px solid {plan_c}55;
-                                     border-radius:6px;padding:.2rem .6rem">{pay_plan}</span>
-                        <span style="font-size:.72rem;color:{TEXT3}">{pay_billing} billing</span>
-                      </div>
-                      <div style="font-size:.85rem;font-weight:700;color:{TEXT1}">
-                        PKR {pay_amount}
-                        <span style="font-size:.75rem;font-weight:400;color:{TEXT2}"> via {pay_method}</span>
-                      </div>
-                      <div style="font-size:.72rem;color:{TEXT3};margin-top:.25rem;font-family:'JetBrains Mono',monospace">
-                        Txn: {pay_txn}
-                      </div>
-                      <div style="font-size:.68rem;color:{TEXT3};margin-top:.1rem">{pay_date}</div>
-                    </div>
-                    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.4rem">
-                      <span style="display:inline-flex;align-items:center;gap:.4rem;padding:.4rem 1rem;
-                                   border-radius:999px;font-size:.78rem;font-weight:800;
-                                   background:{badge_bg};border:1px solid {badge_bdr};color:{badge_col}">
-                        {status_icon} {status_lbl}
-                      </span>
-                      {approved_html}
-                      <div style="font-size:.65rem;font-weight:700;color:{TEXT3};
-                                  font-family:'JetBrains Mono',monospace">{pay_id_disp}</div>
-                    </div>
-                  </div>
-                  {note_html}
-                </div>""", unsafe_allow_html=True)
+                    h += f'<div style="margin-top:.5rem;font-size:.74rem;color:#9ca3af;background:#1a1a1a;border-radius:8px;padding:.35rem .7rem">📝 {pay["admin_note"]}</div>'
+                h += '</div>'
+                st.markdown(h, unsafe_allow_html=True)
 
         # ── FAQ ──
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
@@ -1871,418 +2007,6 @@ You'll see your plan update automatically on next login.
             with st.expander(f"❓ {q}"):
                 st.markdown(f'<p style="color:{TEXT2};font-size:.9rem;line-height:1.7;margin:0">{a}</p>', unsafe_allow_html=True)
 
-    # ═══════════════════════════
-    # ADMIN TAB — only for admin emails
-    # ═══════════════════════════
-    if is_admin and tab_admin is not None:
-        with tab_admin:
-            all_payments  = load_json(PAYMENTS_FILE)
-            all_users_db  = load_json(USERS_FILE)
-            all_history   = load_json(HISTORY_FILE)
-
-            pending_pays  = [p for p in all_payments.values() if p.get("status") == "pending"]
-            approved_pays = [p for p in all_payments.values() if p.get("status") == "approved"]
-            rejected_pays = [p for p in all_payments.values() if p.get("status") == "rejected"]
-            total_revenue = sum(p.get("amount", 0) for p in approved_pays)
-
-            # ── Admin Header ──
-            st.markdown(f"""
-            <div style="background:linear-gradient(135deg,rgba(192,132,252,0.10),rgba(96,165,250,0.08));
-                        border:1px solid rgba(192,132,252,0.35);border-radius:20px;padding:1.75rem 2rem;
-                        margin-bottom:1.5rem;display:flex;align-items:center;gap:1.25rem">
-              <div style="font-size:2.8rem">🔐</div>
-              <div>
-                <div style="font-size:1.3rem;font-weight:900;color:#c084fc">Admin Control Panel</div>
-                <div style="font-size:.85rem;color:{TEXT2};margin-top:.2rem">
-                  Logged in as <b style="color:{TEXT1}">{uname_global}</b> ({uemail_global}) ·
-                  <span style="color:#c084fc;font-weight:700">Admin Access</span>
-                </div>
-              </div>
-            </div>""", unsafe_allow_html=True)
-
-            # ── Stats Row ──
-            sa1, sa2, sa3, sa4, sa5 = st.columns(5)
-            for col, label, val, sub, cls in [
-                (sa1, "Total Users",    len(all_users_db),   "registered",          ""),
-                (sa2, "Pending",        len(pending_pays),   "awaiting approval",   "warn" if pending_pays else ""),
-                (sa3, "Approved",       len(approved_pays),  "payments",            "good"),
-                (sa4, "Rejected",       len(rejected_pays),  "payments",            "danger" if rejected_pays else ""),
-                (sa5, "Revenue (PKR)",  f"{total_revenue:,.0f}", "total collected", "good"),
-            ]:
-                with col:
-                    st.markdown(f"""
-                    <div class="stat-card {cls}">
-                      <div class="bar"></div>
-                      <div class="label">{label}</div>
-                      <div class="value">{val}</div>
-                      <div class="sub">{sub}</div>
-                    </div>""", unsafe_allow_html=True)
-
-            st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-
-            # ── Admin Sub-tabs ──
-            adm1, adm2, adm3, adm4 = st.tabs([
-                f"⏳ Pending ({len(pending_pays)})",
-                f"✅ Approved ({len(approved_pays)})",
-                "👥 All Users",
-                "📧 Email Log"
-            ])
-
-            # ────────────────────────────────
-            # PENDING PAYMENTS
-            # ────────────────────────────────
-            with adm1:
-                if not pending_pays:
-                    st.markdown(f"""
-                    <div style="text-align:center;padding:3rem;background:{CARD_BG};border:1px solid {BORDER};border-radius:16px">
-                      <div style="font-size:3rem;margin-bottom:.5rem">✨</div>
-                      <div style="font-weight:700;color:{TEXT1}">No pending payments!</div>
-                      <div style="color:{TEXT2};font-size:.875rem;margin-top:.25rem">All caught up.</div>
-                    </div>""", unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div style="background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.30);
-                                border-radius:12px;padding:.85rem 1.25rem;margin-bottom:1rem;
-                                font-size:.875rem;color:{ACCENTY};font-weight:600">
-                      ⚠️ {len(pending_pays)} payment(s) waiting for your approval
-                    </div>""", unsafe_allow_html=True)
-
-                    for pay in sorted(pending_pays, key=lambda x: x.get("submitted_at",""), reverse=True):
-                        plan_c  = PRICING.get(pay.get("plan",""), {}).get("color", TEXT2)
-                        pay_pid = pay.get("id","")
-                        p_name  = pay.get("name","?")
-                        p_email = pay.get("email","?")
-                        p_plan  = pay.get("plan","?").upper()
-                        p_bill  = pay.get("billing","monthly").title()
-                        p_amt   = f"{pay.get('amount',0):,.0f}"
-                        p_meth  = pay.get("payment_method","?").replace("_"," ").title()
-                        p_txn   = pay.get("txn_id","?")
-                        p_date  = pay.get("submitted_at","")[:16]
-
-                        st.markdown(f"""
-                        <div style="background:{CARD_BG};border:2px solid rgba(251,191,36,0.35);
-                                    border-radius:18px;padding:1.5rem;margin-bottom:1rem;position:relative;overflow:hidden">
-                          <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,{ACCENTY},{plan_c})"></div>
-                          <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:flex-start">
-                            <div style="flex:1;min-width:220px">
-                              <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem">
-                                <span style="font-size:1.5rem">👤</span>
-                                <div>
-                                  <div style="font-size:.95rem;font-weight:800;color:{TEXT1}">{p_name}</div>
-                                  <div style="font-size:.75rem;color:{TEXT3}">{p_email}</div>
-                                </div>
-                              </div>
-                              <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
-                                <div style="background:{BG3};border-radius:8px;padding:.5rem .75rem">
-                                  <div style="font-size:.6rem;font-weight:800;text-transform:uppercase;color:{TEXT3}">Plan</div>
-                                  <div style="font-weight:800;color:{plan_c}">{p_plan}</div>
-                                </div>
-                                <div style="background:{BG3};border-radius:8px;padding:.5rem .75rem">
-                                  <div style="font-size:.6rem;font-weight:800;text-transform:uppercase;color:{TEXT3}">Billing</div>
-                                  <div style="font-weight:700;color:{TEXT1}">{p_bill}</div>
-                                </div>
-                                <div style="background:{BG3};border-radius:8px;padding:.5rem .75rem">
-                                  <div style="font-size:.6rem;font-weight:800;text-transform:uppercase;color:{TEXT3}">Amount</div>
-                                  <div style="font-weight:800;color:{ACCENTY}">PKR {p_amt}</div>
-                                </div>
-                                <div style="background:{BG3};border-radius:8px;padding:.5rem .75rem">
-                                  <div style="font-size:.6rem;font-weight:800;text-transform:uppercase;color:{TEXT3}">Method</div>
-                                  <div style="font-weight:700;color:{TEXT1}">{p_meth}</div>
-                                </div>
-                              </div>
-                            </div>
-                            <div style="flex:1;min-width:220px">
-                              <div style="background:{BG3};border-radius:10px;padding:.85rem 1rem;margin-bottom:.75rem">
-                                <div style="font-size:.65rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.3rem">Transaction ID</div>
-                                <div style="font-size:.95rem;font-weight:700;color:{ACCENT2};font-family:'JetBrains Mono',monospace;word-break:break-all">{p_txn}</div>
-                              </div>
-                              <div style="font-size:.72rem;color:{TEXT3};margin-bottom:.75rem">
-                                📅 Submitted: {p_date} &nbsp;·&nbsp; ID: <code style="color:{TEXT2}">{pay_pid}</code>
-                              </div>
-                            </div>
-                          </div>
-                        </div>""", unsafe_allow_html=True)
-
-                        # Approve / Reject buttons + note
-                        btn_col1, btn_col2, btn_col3 = st.columns([2, 2, 3])
-                        with btn_col1:
-                            if st.button(f"✅ Approve", key=f"approve_{pay_pid}"):
-                                if approve_payment(pay_pid):
-                                    # Notify user via activity log
-                                    log_activity(pay.get("email",""), "plan_approved",
-                                                 f"{pay.get('plan','')} plan activated by admin")
-                                    st.success(f"✅ Approved! **{p_name}** upgraded to **{p_plan}**.")
-                                    st.rerun()
-                                else:
-                                    st.error("❌ Approval failed. Check payment ID.")
-                        with btn_col2:
-                            if st.button(f"❌ Reject", key=f"reject_{pay_pid}"):
-                                payments_rj = load_json(PAYMENTS_FILE)
-                                if pay_pid in payments_rj:
-                                    payments_rj[pay_pid]["status"] = "rejected"
-                                    payments_rj[pay_pid]["processed_at"] = now_str()
-                                    save_json(PAYMENTS_FILE, payments_rj)
-                                    log_activity(pay.get("email",""), "plan_rejected",
-                                                 f"{pay.get('plan','')} payment rejected by admin")
-                                    st.warning(f"❌ Rejected payment from {p_name}.")
-                                    st.rerun()
-                        with btn_col3:
-                            admin_note_in = st.text_input("Admin note (optional)",
-                                                          placeholder="e.g. Txn verified ✓",
-                                                          key=f"note_{pay_pid}",
-                                                          label_visibility="collapsed")
-                            if admin_note_in:
-                                payments_note = load_json(PAYMENTS_FILE)
-                                if pay_pid in payments_note:
-                                    payments_note[pay_pid]["admin_note"] = admin_note_in
-                                    save_json(PAYMENTS_FILE, payments_note)
-
-                        st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-
-            # ────────────────────────────────
-            # APPROVED PAYMENTS
-            # ────────────────────────────────
-            with adm2:
-                if not approved_pays:
-                    st.info("No approved payments yet.")
-                else:
-                    # Revenue chart
-                    rev_by_plan = {}
-                    for p in approved_pays:
-                        k = p.get("plan","?").title()
-                        rev_by_plan[k] = rev_by_plan.get(k, 0) + p.get("amount", 0)
-
-                    fig_rev = go.Figure(go.Pie(
-                        labels=list(rev_by_plan.keys()),
-                        values=list(rev_by_plan.values()),
-                        hole=.55,
-                        marker_colors=[ACCENT1, ACCENT3],
-                        textinfo="label+percent",
-                        textfont=dict(size=12, color=TEXT1)
-                    ))
-                    fig_rev.update_layout(**chart_layout(height=280, title="Revenue by Plan",
-                                                          showlegend=False))
-                    rc1, rc2 = st.columns([1, 2])
-                    with rc1:
-                        st.plotly_chart(fig_rev, use_container_width=True)
-                    with rc2:
-                        st.markdown(f"""
-                        <div style="padding:1rem 0">
-                          <div style="font-size:.7rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.75rem">Revenue Summary</div>""",
-                                    unsafe_allow_html=True)
-                        for plan_k, rev_v in rev_by_plan.items():
-                            p_color = PRICING.get(plan_k.lower(), {}).get("color", TEXT2)
-                            count = sum(1 for p in approved_pays if p.get("plan","").title() == plan_k)
-                            st.markdown(f"""
-                            <div style="display:flex;justify-content:space-between;align-items:center;
-                                        padding:.6rem .9rem;background:{BG3};border-radius:10px;margin-bottom:.4rem">
-                              <span style="font-weight:700;color:{p_color}">{plan_k}</span>
-                              <span style="font-size:.8rem;color:{TEXT3}">{count} payment(s)</span>
-                              <span style="font-weight:900;color:{ACCENTY};font-family:'JetBrains Mono',monospace">PKR {rev_v:,.0f}</span>
-                            </div>""", unsafe_allow_html=True)
-                        st.markdown(f"""
-                          <div style="display:flex;justify-content:space-between;align-items:center;
-                                      padding:.75rem .9rem;background:rgba(74,222,128,0.08);
-                                      border:1px solid rgba(74,222,128,0.30);border-radius:10px;margin-top:.5rem">
-                            <span style="font-weight:900;color:{TEXT1}">Total Revenue</span>
-                            <span style="font-weight:900;font-size:1.1rem;color:{ACCENT1};font-family:'JetBrains Mono',monospace">PKR {total_revenue:,.0f}</span>
-                          </div>
-                        </div>""", unsafe_allow_html=True)
-
-                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-                    st.markdown(f"""<div class="section-head"><div class="icon-wrap">✅</div><h3>Approved Payments</h3></div>""", unsafe_allow_html=True)
-
-                    for pay in sorted(approved_pays, key=lambda x: x.get("processed_at",""), reverse=True):
-                        plan_c = PRICING.get(pay.get("plan",""), {}).get("color", TEXT2)
-                        p_plan_disp  = pay.get("plan","?").upper()
-                        p_name_disp  = pay.get("name","?")
-                        p_email_disp = pay.get("email","?")
-                        p_amt_disp   = f"{pay.get('amount',0):,.0f}"
-                        p_txn_disp   = pay.get("txn_id","?")
-                        p_proc       = pay.get("processed_at","")[:16]
-                        p_sub_disp   = pay.get("submitted_at","")[:16]
-                        p_id_disp    = pay.get("id","")
-                        p_note_disp  = pay.get("admin_note","")
-                        st.markdown(f"""
-                        <div style="background:{CARD_BG};border:1px solid rgba(74,222,128,0.25);
-                                    border-radius:14px;padding:1.1rem 1.25rem;margin-bottom:.6rem;
-                                    display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
-                          <div style="font-size:1.5rem">✅</div>
-                          <div style="flex:1;min-width:180px">
-                            <div style="font-size:.9rem;font-weight:700;color:{TEXT1}">{p_name_disp}</div>
-                            <div style="font-size:.72rem;color:{TEXT3}">{p_email_disp}</div>
-                          </div>
-                          <span style="font-size:.72rem;font-weight:800;color:{plan_c};background:{plan_c}18;
-                                       border:1px solid {plan_c}44;border-radius:6px;padding:.2rem .6rem">{p_plan_disp}</span>
-                          <div style="font-size:.82rem;font-weight:800;color:{ACCENTY};font-family:'JetBrains Mono',monospace">PKR {p_amt_disp}</div>
-                          <div style="font-size:.72rem;color:{TEXT3}">Approved: {p_proc}</div>
-                          <div style="font-size:.65rem;color:{TEXT3};font-family:monospace">{p_id_disp}</div>
-                        </div>""", unsafe_allow_html=True)
-
-            # ────────────────────────────────
-            # ALL USERS
-            # ────────────────────────────────
-            with adm3:
-                st.markdown(f"""<div class="section-head"><div class="icon-wrap">👥</div><h3>Registered Users ({len(all_users_db)})</h3></div>""", unsafe_allow_html=True)
-
-                # Search
-                user_search = st.text_input("🔍 Search by name or email", placeholder="Type to filter...", key="admin_user_search")
-
-                # Plan filter
-                pf1, pf2, pf3, pf4 = st.columns(4)
-                with pf1:
-                    show_free = st.checkbox("🌱 Free", value=True, key="uf_free")
-                with pf2:
-                    show_pro = st.checkbox("⚡ Pro", value=True, key="uf_pro")
-                with pf3:
-                    show_ent = st.checkbox("🏢 Enterprise", value=True, key="uf_ent")
-                with pf4:
-                    sort_by = st.selectbox("Sort by", ["Signup Date ↓", "Name A-Z", "Plan"], key="uf_sort")
-
-                plan_filter = []
-                if show_free: plan_filter.append("free")
-                if show_pro:  plan_filter.append("pro")
-                if show_ent:  plan_filter.append("enterprise")
-
-                filtered_users = []
-                for em, ud in all_users_db.items():
-                    u_plan = get_user_plan(em)
-                    if u_plan not in plan_filter:
-                        continue
-                    if user_search and user_search.lower() not in em.lower() and user_search.lower() not in ud.get("name","").lower():
-                        continue
-                    u_hist = all_history.get(em, {})
-                    filtered_users.append({
-                        "email": em,
-                        "name": ud.get("name","?"),
-                        "plan": u_plan,
-                        "signup_date": ud.get("signup_date","")[:10],
-                        "last_login": u_hist.get("last_login","")[:16],
-                        "login_count": u_hist.get("login_count", 0),
-                        "datasets_trained": u_hist.get("datasets_trained", 0),
-                        "plan_expiry": ud.get("plan_expiry",""),
-                    })
-
-                if sort_by == "Name A-Z":
-                    filtered_users.sort(key=lambda x: x["name"].lower())
-                elif sort_by == "Plan":
-                    order = {"enterprise":0,"pro":1,"free":2}
-                    filtered_users.sort(key=lambda x: order.get(x["plan"],3))
-                else:
-                    filtered_users.sort(key=lambda x: x["signup_date"], reverse=True)
-
-                st.markdown(f'<div style="font-size:.75rem;color:{TEXT3};margin-bottom:.75rem">{len(filtered_users)} users shown</div>', unsafe_allow_html=True)
-
-                for u in filtered_users:
-                    u_plan_c = PLAN_COLORS.get(u["plan"], TEXT3)
-                    u_plan_i = PLAN_ICONS.get(u["plan"], "🌱")
-                    u_expiry_note = f' · Expires: {u["plan_expiry"][:10]}' if u.get("plan_expiry") and u["plan"] != "free" else ""
-                    st.markdown(f"""
-                    <div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:14px;
-                                padding:1rem 1.25rem;margin-bottom:.5rem;
-                                display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
-                      <div style="width:36px;height:36px;border-radius:50%;background:{u_plan_c}20;
-                                  border:2px solid {u_plan_c}50;display:flex;align-items:center;
-                                  justify-content:center;font-size:1.1rem;flex-shrink:0">{u_plan_i}</div>
-                      <div style="flex:1;min-width:180px">
-                        <div style="font-size:.9rem;font-weight:700;color:{TEXT1}">{u["name"]}</div>
-                        <div style="font-size:.72rem;color:{TEXT3}">{u["email"]}</div>
-                      </div>
-                      <span style="font-size:.7rem;font-weight:800;color:{u_plan_c};background:{u_plan_c}18;
-                                   border:1px solid {u_plan_c}44;border-radius:6px;padding:.2rem .55rem">
-                        {u["plan"].upper()}{u_expiry_note}
-                      </span>
-                      <div style="text-align:center;min-width:50px">
-                        <div style="font-size:1.1rem;font-weight:900;color:{ACCENT2}">{u["login_count"]}</div>
-                        <div style="font-size:.6rem;color:{TEXT3}">logins</div>
-                      </div>
-                      <div style="text-align:center;min-width:50px">
-                        <div style="font-size:1.1rem;font-weight:900;color:{ACCENT1}">{u["datasets_trained"]}</div>
-                        <div style="font-size:.6rem;color:{TEXT3}">trained</div>
-                      </div>
-                      <div style="font-size:.7rem;color:{TEXT3};text-align:right;min-width:110px">
-                        Joined: {u["signup_date"]}<br>
-                        Last: {u["last_login"][:10] if u["last_login"] else "never"}
-                      </div>
-                    </div>""", unsafe_allow_html=True)
-
-                    # Quick plan override for admin
-                    with st.expander(f"⚙️ Manage {u['name']}", expanded=False):
-                        mc1, mc2, mc3 = st.columns(3)
-                        with mc1:
-                            new_plan = st.selectbox("Set Plan", ["free","pro","enterprise"],
-                                                    index=["free","pro","enterprise"].index(u["plan"]),
-                                                    key=f"setplan_{u['email']}")
-                        with mc2:
-                            new_months = st.number_input("Duration (months)", 1, 24, 1,
-                                                          key=f"setmonths_{u['email']}")
-                        with mc3:
-                            st.markdown("<br>", unsafe_allow_html=True)
-                            if st.button(f"💾 Apply", key=f"applyplan_{u['email']}"):
-                                upgrade_user_plan(u["email"], new_plan, int(new_months))
-                                log_activity(u["email"], "plan_changed_by_admin",
-                                             f"Plan set to {new_plan} for {new_months} month(s) by admin")
-                                st.success(f"✅ {u['name']} → {new_plan.upper()} for {new_months} month(s)")
-                                st.rerun()
-
-            # ────────────────────────────────
-            # EMAIL LOG
-            # ────────────────────────────────
-            with adm4:
-                st.markdown(f"""<div class="section-head"><div class="icon-wrap">📧</div><h3>Email Notification Log</h3></div>""", unsafe_allow_html=True)
-                email_log = load_json("dataforge_email_log.json")
-
-                if not email_log:
-                    st.info("No email events logged yet.")
-                else:
-                    # Show most recent first
-                    log_entries = sorted(email_log.items(), reverse=True)[:50]
-                    for ts, entry in log_entries:
-                        has_error   = "error" in entry
-                        is_sent     = entry.get("status") == "sent_ok"
-                        icon        = "✅" if is_sent else ("❌" if has_error else "📧")
-                        color       = ACCENT1 if is_sent else (ACCENTR if has_error else ACCENTY)
-                        subject_txt = entry.get("subject","(no subject)")
-                        error_txt   = entry.get("error","")
-                        note_txt    = entry.get("note","")
-                        bdr_color   = "rgba(248,113,113,0.30)" if has_error else BORDER
-
-                        # pre-build optional blocks
-                        err_block  = ""
-                        if error_txt:
-                            err_block = f'<div style="font-size:.75rem;color:#f87171;margin-top:.35rem;background:rgba(248,113,113,0.07);border-radius:6px;padding:.3rem .6rem"><b>Error:</b> {error_txt}</div>'
-                        note_block = ""
-                        if note_txt:
-                            note_block = f'<div style="font-size:.72rem;color:#fbbf24;margin-top:.3rem;background:rgba(251,191,36,0.07);border-radius:6px;padding:.3rem .6rem">{note_txt}</div>'
-
-                        st.markdown(f"""
-                        <div style="background:{CARD_BG};border:1px solid {bdr_color};
-                                    border-radius:12px;padding:.9rem 1.1rem;margin-bottom:.4rem">
-                          <div style="display:flex;align-items:flex-start;gap:.75rem">
-                            <span style="font-size:1.1rem;flex-shrink:0">{icon}</span>
-                            <div style="flex:1;min-width:0">
-                              <div style="font-size:.82rem;font-weight:700;color:{color};
-                                          white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{subject_txt}</div>
-                              <div style="font-size:.7rem;color:{TEXT3};margin-top:.15rem">{ts}</div>
-                              {err_block}
-                              {note_block}
-                            </div>
-                          </div>
-                        </div>""", unsafe_allow_html=True)
-
-                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-                    el_col1, el_col2 = st.columns(2)
-                    with el_col1:
-                        log_df = pd.DataFrame([
-                            {"timestamp": ts, **{k: str(v)[:80] for k, v in entry.items()}}
-                            for ts, entry in log_entries
-                        ])
-                        st.download_button("📥 Export Email Log CSV", log_df.to_csv(index=False),
-                                           "email_log.csv", "text/csv")
-                    with el_col2:
-                        if st.button("🗑️ Clear Email Log", key="clear_email_log"):
-                            save_json("dataforge_email_log.json", {})
-                            st.success("Email log cleared."); st.rerun()
 else:
     # ── WELCOME SCREEN — no interactive widgets (avoids duplicate key errors) ──
     st.markdown(f"""
