@@ -326,9 +326,10 @@ except Exception:
     SMTP_PASS = "rxgjhttmfzgfgzdu"
 
 def send_email(subject: str, body: str):
+    """Send email notification. Logs errors to dataforge_email_log.json for debugging."""
     if not SMTP_USER or not SMTP_PASS:
         log = load_json("dataforge_email_log.json")
-        log[now_str()] = {"subject": subject, "body": body}
+        log[now_str()] = {"subject": subject, "body": body, "error": "No SMTP credentials"}
         save_json("dataforge_email_log.json", log)
         return False
     try:
@@ -336,14 +337,58 @@ def send_email(subject: str, body: str):
         msg["Subject"] = subject
         msg["From"]    = SMTP_USER
         msg["To"]      = NOTIFY_TO
-        msg.attach(MIMEText(body, "plain"))
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=8) as server:
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_USER, NOTIFY_TO, msg.as_string())
+        # Plain text part
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        # HTML part — nicer formatting
+        html_body = f"""
+        <html><body style="font-family:monospace;background:#0a0a0a;color:#e5e7eb;padding:24px">
+        <div style="max-width:500px;margin:auto;background:#111;border:1px solid #222;border-radius:12px;padding:24px">
+        <pre style="white-space:pre-wrap;font-size:13px;color:#d1fae5;margin:0">{body}</pre>
+        </div></body></html>"""
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+        # Try SSL first (port 465), fallback to STARTTLS (port 587)
+        sent = False
+        last_err = None
+        for port, use_ssl in [(465, True), (587, False)]:
+            try:
+                if use_ssl:
+                    with smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=10) as server:
+                        server.login(SMTP_USER, SMTP_PASS)
+                        server.sendmail(SMTP_USER, NOTIFY_TO, msg.as_string())
+                else:
+                    with smtplib.SMTP("smtp.gmail.com", port, timeout=10) as server:
+                        server.ehlo()
+                        server.starttls()
+                        server.ehlo()
+                        server.login(SMTP_USER, SMTP_PASS)
+                        server.sendmail(SMTP_USER, NOTIFY_TO, msg.as_string())
+                sent = True
+                break
+            except Exception as e:
+                last_err = e
+                continue
+        if not sent:
+            raise last_err
+        # Log success
+        log = load_json("dataforge_email_log.json")
+        log[now_str()] = {"subject": subject, "status": "sent_ok"}
+        save_json("dataforge_email_log.json", log)
         return True
     except Exception as e:
+        # Save full error for debugging
         log = load_json("dataforge_email_log.json")
-        log[now_str()] = {"subject": subject, "body": body, "error": str(e)}
+        log[now_str()] = {
+            "subject": subject,
+            "body": body[:500],
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "smtp_user": SMTP_USER,
+            "note": (
+                "IMPORTANT: Gmail requires an App Password, NOT your regular password. "
+                "Go to myaccount.google.com → Security → 2-Step Verification → App passwords. "
+                "Generate one for 'Mail' and use that 16-char code as SMTP_PASS."
+            )
+        }
         save_json("dataforge_email_log.json", log)
         return False
 
@@ -398,7 +443,7 @@ def notify_payment_submitted(user_name: str, email: str, plan: str, amount: floa
  To approve: Run approve_payment("{pay_id}")
  in the Admin section of the app.
 ══════════════════════════════════════════"""
-    send_email(subject, body)
+    return send_email(subject, body)
 
 # ─────────────────────────────────────────────
 #  USER HISTORY HELPERS
@@ -1667,7 +1712,7 @@ if st.session_state.data is not None:
                             user_name=uname_global
                         )
                         log_activity(uemail_global, "payment_submitted", f"{selected_plan} | PKR {amount_pkr:,.0f} | {pay_id}")
-                        notify_payment_submitted(
+                        email_sent = notify_payment_submitted(
                             user_name=uname_global, email=uemail_global,
                             plan=selected_plan, amount=amount_pkr,
                             method=st.session_state.selected_pm,
@@ -1675,13 +1720,33 @@ if st.session_state.data is not None:
                         )
                         st.session_state.upgrade_plan_selected = None
                         st.success(f"""
-                        ✅ **Payment request submitted successfully!**
+✅ **Payment request submitted successfully!**
 
-                        **Payment ID:** `{pay_id}`
+**Payment ID:** `{pay_id}`
 
-                        We'll verify your payment within **2-24 hours** and activate your {selected_plan.title()} plan.
-                        You'll see your plan update automatically on next login.
+We'll verify your payment within **2-24 hours** and activate your {selected_plan.title()} plan.
+You'll see your plan update automatically on next login.
                         """)
+                        # Show email delivery status
+                        if email_sent:
+                            st.info("📧 Notification email sent to admin successfully.")
+                        else:
+                            # Read the error from log
+                            email_log = load_json("dataforge_email_log.json")
+                            last_entries = list(email_log.items())
+                            last_err_msg = ""
+                            for ts, entry in reversed(last_entries):
+                                if "error" in entry:
+                                    last_err_msg = entry.get("error", "")
+                                    break
+                            st.warning(
+                                f"⚠️ **Admin email notification failed.** Your payment IS saved (ID: `{pay_id}`), "
+                                f"but the admin email could not be sent.\n\n"
+                                f"**Fix:** Gmail requires an **App Password** (not your regular password). "
+                                f"Go to **myaccount.google.com → Security → 2-Step Verification → App passwords**, "
+                                f"generate one for 'Mail', and set it as `SMTP_PASS` in your Streamlit secrets.\n\n"
+                                + (f"**Error:** `{last_err_msg}`" if last_err_msg else "")
+                            )
                         st.balloons()
 
             st.markdown("</div>", unsafe_allow_html=True)  # close payment flow div
@@ -1705,28 +1770,45 @@ if st.session_state.data is not None:
                 status_icon = "⏳" if status=="pending" else ("✅" if status=="approved" else "❌")
                 status_label = status.upper()
                 plan_c = PRICING.get(pay.get("plan",""), {}).get("color", TEXT2)
+                pay_plan    = pay.get('plan','?').upper()
+                pay_billing = pay.get('billing','monthly').title()
+                pay_amount  = f"{pay.get('amount',0):,.0f}"
+                pay_method  = pay.get('payment_method','?').replace('_',' ').title()
+                pay_txn     = pay.get('txn_id','?')
+                pay_date    = pay.get('submitted_at','')[:16]
+                pay_id_disp = pay.get('id','')
+                # Build optional blocks as plain strings first
+                approved_html = ""
+                if pay.get("processed_at"):
+                    processed_date = pay.get("processed_at","")[:16]
+                    approved_html = f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.3rem">Approved: {processed_date}</div>'
+                note_html = ""
+                if pay.get("admin_note"):
+                    admin_note_txt = pay.get("admin_note","")
+                    note_html = f'<div style="margin-top:.5rem;font-size:.75rem;color:{TEXT3};background:{BG3};border-radius:8px;padding:.4rem .75rem">Note: {admin_note_txt}</div>'
+
                 st.markdown(f"""
                 <div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:16px;padding:1.25rem;margin-bottom:.75rem">
                   <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
                     <div style="flex:1;min-width:200px">
                       <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.35rem">
-                        <span style="font-size:.72rem;font-weight:800;color:{plan_c};background:{plan_c}18;border:1px solid {plan_c}44;border-radius:6px;padding:.15rem .55rem">{pay.get('plan','?').upper()}</span>
-                        <span style="font-size:.72rem;color:{TEXT3}">{pay.get('billing','monthly').title()} billing</span>
+                        <span style="font-size:.72rem;font-weight:800;color:{plan_c};background:{plan_c}18;border:1px solid {plan_c}44;border-radius:6px;padding:.15rem .55rem">{pay_plan}</span>
+                        <span style="font-size:.72rem;color:{TEXT3}">{pay_billing} billing</span>
                       </div>
                       <div style="font-size:.8rem;color:{TEXT2}">
-                        <b>PKR {pay.get('amount',0):,.0f}</b> via {pay.get('payment_method','?').replace('_',' ').title()}
+                        <b>PKR {pay_amount}</b> via {pay_method}
                       </div>
                       <div style="font-size:.72rem;color:{TEXT3};margin-top:.2rem">
-                        Txn: <code>{pay.get('txn_id','?')}</code> · {pay.get('submitted_at','')[:16]}
+                        Txn: <code>{pay_txn}</code> · {pay_date}
                       </div>
                     </div>
                     <div>
                       <span class="{status_cls}">{status_icon} {status_label}</span>
-                      {f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.3rem">Approved: {pay.get("processed_at","")[:16]}</div>' if pay.get("processed_at") else ""}
+                      {approved_html}
                     </div>
-                    <div style="font-size:.65rem;font-weight:700;color:{TEXT3};font-family:monospace">{pay.get('id','')}</div>
+                    <div style="font-size:.65rem;font-weight:700;color:{TEXT3};font-family:monospace">{pay_id_disp}</div>
                   </div>
-                  {f'<div style="margin-top:.5rem;font-size:.75rem;color:{TEXT3};background:{BG3};border-radius:8px;padding:.4rem .75rem">Note: {pay.get("admin_note","")}</div>' if pay.get("admin_note") else ""}
+                  {note_html}
                 </div>""", unsafe_allow_html=True)
 
         # ── FAQ ──
