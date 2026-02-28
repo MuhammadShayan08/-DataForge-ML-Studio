@@ -1,5 +1,6 @@
 # =====================================================================
 #  DataForge ML Studio — Full App with Payment/Upgrade System
+#  FIXED VERSION — All 7 bugs patched
 # =====================================================================
 import streamlit as st
 import pandas as pd
@@ -55,6 +56,7 @@ SAFE_CLF_MODELS      = ["lr","dt","rf","et","ridge","knn","nb","ada"]
 ADVANCED_CLF_MODELS  = ["lr","dt","rf","et","ridge","knn","nb","ada","xgboost","lightgbm","catboost","gbc","lda"]
 SAFE_REG_MODELS      = ["lr","dt","rf","et","ridge","lasso","knn","ada","en"]
 ADVANCED_REG_MODELS  = ["lr","dt","rf","et","ridge","lasso","knn","ada","en","xgboost","lightgbm","catboost","gbr","br"]
+# ✅ FIX #6: BLACKLISTED_FREE only applied to free users — Pro/Enterprise get ALL advanced models
 BLACKLISTED_FREE     = ["xgboost","lightgbm","catboost","svm","rbfsvm","mlp","gpc"]
 
 def get_memory_usage_mb() -> float:
@@ -88,8 +90,9 @@ def smart_sample(df: pd.DataFrame, target_col: str, max_rows: int = MAX_ROWS_TRA
         pass
     return df.sample(n=max_rows, random_state=SAMPLE_RANDOM_STATE).reset_index(drop=True)
 
+# ✅ FIX #3: Added max_models parameter — slider value now actually used
 def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
-                              normalize, remove_out, has_advanced):
+                              normalize, remove_out, has_advanced, max_models=None):
     warnings_list = []
     t0 = time.time()
 
@@ -116,8 +119,14 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
         include_models = ADVANCED_CLF_MODELS if has_advanced else SAFE_CLF_MODELS
     else:
         include_models = ADVANCED_REG_MODELS if has_advanced else SAFE_REG_MODELS
+
+    # ✅ FIX #6: Blacklist ONLY for free users (has_advanced=False)
     if not has_advanced:
         include_models = [m for m in include_models if m not in BLACKLISTED_FREE]
+
+    # ✅ FIX #3: Apply max_models limit if provided
+    if max_models and max_models < len(include_models):
+        include_models = include_models[:max_models]
 
     # ── Memory check ──
     mem_before = get_memory_usage_mb()
@@ -198,8 +207,8 @@ PRICING = {
         "monthly_price": 79, "annual_price": 63,
         "annual_total": 756, "color": "#c084fc",
         "features": [
-            "Everything in Pro","Unlimited history","REST API access",
-            "Unlimited team members","Custom model pipelines",
+            "Everything in Pro","Unlimited history","REST API access (Coming Soon)",
+            "Unlimited team members (Coming Soon)","Custom model pipelines",
             "Dedicated support channel","SLA guarantee","On-premise deployment option",
         ],
         "not_included": []
@@ -209,7 +218,7 @@ PRICING = {
 PAYMENT_METHODS = {
     "easypaisa": {
         "name": "EasyPaisa", "icon": "📱",
-        "number": "0300-1234567", "account_name": "DataForge Studio",
+        "number": "0308-0203807", "account_name": "Zubair Anjum Lodhi",
         "instructions": [
             "Open EasyPaisa app on your phone",
             "Go to 'Send Money' → 'Mobile Account'",
@@ -222,11 +231,11 @@ PAYMENT_METHODS = {
     },
     "jazzcash": {
         "name": "JazzCash", "icon": "💸",
-        "number": "0333-7654321", "account_name": "DataForge Studio",
+        "number": "0308-0203807", "account_name": "Zubair Anjum Lodhi",
         "instructions": [
             "Open JazzCash app on your phone",
             "Go to 'Send Money' → 'Mobile Account'",
-            "Enter number: **0333-7654321**",
+            "Enter number: **0308-0203807**",
             "Enter the exact amount for your plan",
             "Add your email in the description/reference",
             "Send the payment and note the Transaction ID",
@@ -235,7 +244,7 @@ PAYMENT_METHODS = {
     },
     "bank_transfer": {
         "name": "Bank Transfer", "icon": "🏦",
-        "bank": "Meezan Bank", "account_title": "DataForge Technologies",
+        "bank": "Sadapay", "account_title": "Zubair Anjum Lodhi",
         "account_number": "01234567890123", "iban": "PK36MEZN0001234567890123",
         "branch": "Lahore Main Branch",
         "instructions": [
@@ -302,19 +311,20 @@ def now_str():
 # ─────────────────────────────────────────────
 #  PLAN LIMITS
 # ─────────────────────────────────────────────
+# ✅ FIX #4: datasets_per_day set to 3 (matches can_train() hardcoded daily_limit=3)
 PLAN_LIMITS = {
     "free": {
-        "datasets_per_day": 1, "max_algorithms": 5, "cv_folds_max": 1,
+        "datasets_per_day": 3, "max_algorithms": 8, "cv_folds_max": 1,
         "history_entries": 3, "advanced_models": False, "export_model": False,
         "full_history": False, "priority_queue": False, "api_access": False, "team_members": 1,
     },
     "pro": {
-        "datasets_per_day": 999999, "max_algorithms": 15, "cv_folds_max": 10,
+        "datasets_per_day": 999999, "max_algorithms": 13, "cv_folds_max": 10,
         "history_entries": 50, "advanced_models": True, "export_model": True,
         "full_history": True, "priority_queue": True, "api_access": False, "team_members": 1,
     },
     "enterprise": {
-        "datasets_per_day": 999999, "max_algorithms": 15, "cv_folds_max": 10,
+        "datasets_per_day": 999999, "max_algorithms": 14, "cv_folds_max": 10,
         "history_entries": 999999, "advanced_models": True, "export_model": True,
         "full_history": True, "priority_queue": True, "api_access": True, "team_members": 999999,
     },
@@ -349,7 +359,8 @@ def can_train(email: str) -> tuple:
     history = load_json(HISTORY_FILE)
     training_log = history.get(email, {}).get("training_log", [])
     trained_today = sum(1 for t in training_log if t.get("time", "")[:10] == today_str)
-    daily_limit = 3
+    # ✅ FIX #4: Use plan limit instead of hardcoded value
+    daily_limit = PLAN_LIMITS["free"]["datasets_per_day"]  # = 3
     if trained_today >= daily_limit:
         return False, f"⛔ Daily limit reached! Free plan allows {daily_limit} datasets/day. Resets at midnight or upgrade to Pro."
     return True, ""
@@ -541,6 +552,7 @@ def log_activity(email: str, action: str, detail: str = ""):
     history[email]["activity_log"] = history[email]["activity_log"][-100:]
     save_json(HISTORY_FILE, history)
 
+# ✅ FIX #5: log_training now uses plan-aware history limit instead of hardcoded 50
 def log_training(email, dataset, problem_type, best_model, score, rows, cols):
     history = load_json(HISTORY_FILE)
     if email not in history:
@@ -552,7 +564,11 @@ def log_training(email, dataset, problem_type, best_model, score, rows, cols):
         "best_model": best_model, "score": round(float(score), 4), "rows": rows, "cols": cols
     })
     history[email]["datasets_trained"] = history[email].get("datasets_trained", 0) + 1
-    history[email]["training_log"] = history[email]["training_log"][-50:]
+    # ✅ FIX #5: Use plan-aware storage limit — not hardcoded 50
+    user_plan = get_user_plan(email)
+    storage_limit = PLAN_LIMITS[user_plan]["history_entries"]
+    if storage_limit < 999999:
+        history[email]["training_log"] = history[email]["training_log"][-storage_limit:]
     save_json(HISTORY_FILE, history)
 
 # ─────────────────────────────────────────────
@@ -942,7 +958,7 @@ with st.sidebar:
         training_log_sb = uhist_sb2.get("training_log", [])
         trained_today = sum(1 for t in training_log_sb if t.get("time","")[:10] == today_str)
         total_trained = uhist_sb2.get("datasets_trained", 0)
-        daily_limit = 3
+        daily_limit = PLAN_LIMITS["free"]["datasets_per_day"]  # ✅ FIX #4: use plan value
         remaining = max(0, daily_limit - trained_today)
         bar_pct = min(100, int((trained_today / daily_limit) * 100))
         bar_color = ACCENT1 if trained_today == 0 else ACCENTY if trained_today < daily_limit else ACCENTR
@@ -976,7 +992,7 @@ with st.sidebar:
           </div>
           <div style="display:flex;justify-content:space-between;font-size:.72rem">
             <span style="color:{TEXT2}">🔁 CV Folds</span>
-            <span style="font-weight:700;color:{ACCENTR}">max 3</span>
+            <span style="font-weight:700;color:{ACCENTR}">max {PLAN_LIMITS['free']['cv_folds_max']}</span>
           </div>
           <div style="display:flex;justify-content:space-between;font-size:.72rem;margin-top:.3rem">
             <span style="color:{TEXT2}">⚡ XGBoost</span>
@@ -1386,12 +1402,11 @@ if st.session_state.data is not None:
                 st.plotly_chart(fig_h, use_container_width=True)
 
     # ═══════════════════════════
-    # TAB 3 — TRAIN MODEL (Memory-Safe)
+    # TAB 3 — TRAIN MODEL
     # ═══════════════════════════
     with tab3:
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">⚙️</div><h3>Training Configuration</h3></div>""", unsafe_allow_html=True)
 
-        # Memory warning
         mem_now = get_memory_usage_mb()
         if mem_now > 350:
             st.warning(f"⚠️ **High Memory ({mem_now:.0f}MB/512MB)**")
@@ -1429,7 +1444,6 @@ if st.session_state.data is not None:
               </div>
             </div>""", unsafe_allow_html=True)
 
-            # Dataset size advisory
             if len(df) > MAX_ROWS_TRAINING:
                 st.error(
                     f"🚨 **Dataset {len(df):,} rows** — Streamlit Cloud is too large for this.  \n"
@@ -1443,12 +1457,22 @@ if st.session_state.data is not None:
 
             max_folds    = plan_limits["cv_folds_max"]
             has_advanced = plan_limits["advanced_models"]
+            max_algo     = plan_limits["max_algorithms"]
+
+            # Determine actual available model count for display
+            if ptype == "classification":
+                available_models = ADVANCED_CLF_MODELS if has_advanced else SAFE_CLF_MODELS
+            else:
+                available_models = ADVANCED_REG_MODELS if has_advanced else SAFE_REG_MODELS
+            if not has_advanced:
+                available_models = [m for m in available_models if m not in BLACKLISTED_FREE]
+
             st.markdown(f"""
             <div style="background:{"rgba(255,255,255,0.03)" if T=="dark" else "rgba(0,0,0,0.03)"};border:1px solid {BORDER};border-radius:12px;padding:1rem 1.25rem;margin:.75rem 0">
               <span class="insight-chip" style="border-color:{plan_color};color:{plan_color}">{plan_icon} {current_plan.upper()} Plan</span>
               <span class="insight-chip">🔁 Max {max_folds}-fold CV</span>
-              <span class="insight-chip">🤖 {"15+ algorithms" if has_advanced else "8 safe algorithms"}</span>
-              <span class="insight-chip">📦 {"XGBoost, LGBM included" if has_advanced else "XGBoost locked 🔒"}</span>
+              <span class="insight-chip">🤖 {len(available_models)} algorithms available</span>
+              <span class="insight-chip">📦 {"XGBoost ✅ LightGBM ✅ CatBoost ✅" if has_advanced else "XGBoost 🔒 Pro only"}</span>
               <span class="insight-chip">💾 Max {MAX_ROWS_TRAINING:,} rows (auto-sample)</span>
             </div>""", unsafe_allow_html=True)
 
@@ -1457,19 +1481,25 @@ if st.session_state.data is not None:
                 with ac1:
                     train_size = st.slider("Training Split", 0.5, 0.9, 0.8, 0.05)
                 with ac2:
+                    # ✅ FIX #1: CV Folds — use plan's max directly, no forced minimum of 3
                     recommended_fold = min(3, max_folds) if len(df) > MAX_ROWS_WARNING else min(5, max_folds)
-                    safe_max_folds = max(max_folds, 3)
-                    safe_min_folds = 2
-                    safe_default_fold = min(max(recommended_fold, safe_min_folds), safe_max_folds)
+                    safe_default_fold = max(min(recommended_fold, max_folds), min(2, max_folds))
                     fold = st.slider(
-                        f"CV Folds (max {safe_max_folds})", safe_min_folds, safe_max_folds, safe_default_fold,
-                        help=f"Bade datasets pe {recommended_fold}-fold recommend (memory safe)"
+                        f"CV Folds (max {max_folds})",
+                        min_value=min(2, max_folds),
+                        max_value=max_folds,          # ✅ FIXED: no more max(max_folds, 3)
+                        value=safe_default_fold,
+                        help=f"Plan allows max {max_folds} folds. Bade datasets pe {recommended_fold}-fold recommend."
                     )
                 with ac3:
-                    max_algo_slider = max(plan_limits["max_algorithms"], 2)
-                    default_models = min(max(3, max_algo_slider), max_algo_slider)
-                    min_models = min(2, max_algo_slider)
-                    max_models = st.slider(f"Max Models", min_models, max_algo_slider, default_models)
+                    # ✅ FIX #3: max_models slider properly bounded to plan limit
+                    max_models_slider = st.slider(
+                        f"Max Models (plan: {len(available_models)})",
+                        min_value=min(2, len(available_models)),
+                        max_value=len(available_models),
+                        value=len(available_models),
+                        help=f"How many of the {len(available_models)} available models to compare"
+                    )
                 ac4, ac5 = st.columns(2)
                 with ac4:
                     normalize = st.checkbox("Normalize Features", value=True)
@@ -1534,6 +1564,7 @@ if st.session_state.data is not None:
                     status_box.info("🚀 Training is starting...")
 
                     try:
+                        # ✅ FIX #3: Pass max_models_slider to training function
                         best, results, elapsed, warn_msgs, trained_rows = run_memory_safe_training(
                             df           = df,
                             target_col   = target_col,
@@ -1543,6 +1574,7 @@ if st.session_state.data is not None:
                             normalize    = normalize,
                             remove_out   = remove_out,
                             has_advanced = has_advanced,
+                            max_models   = max_models_slider,  # ✅ FIXED
                         )
 
                         progress_bar.progress(100)
@@ -1598,6 +1630,7 @@ if st.session_state.data is not None:
                             status_box.error("💥 **Memory Crash!** Dataset chota karo aur page refresh karo.")
                         else:
                             status_box.error(f"❌ Training failed: {err_str}")
+
     # ═══════════════════════════
     # TAB 4 — RESULTS
     # ═══════════════════════════
@@ -1636,15 +1669,32 @@ if st.session_state.data is not None:
                 st.download_button("📥 Export Results CSV", res_df.to_csv(index=False),
                                    f"results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv", "text/csv")
             with ex2:
+                # ✅ FIX #2: Pro users get actual .pkl file, not .txt
                 if plan_limits["export_model"]:
-                    model_info = f"Best Model: {best_name}\n{metric_name}: {top_score:.4f}\nFolds: {folds_used}"
-                    st.download_button("📋 Export Model Info", model_info, "model_info.txt", "text/plain")
+                    if os.path.exists("best_model.pkl"):
+                        with open("best_model.pkl", "rb") as pkl_f:
+                            pkl_bytes = pkl_f.read()
+                        st.download_button(
+                            "📦 Download Model (.pkl)",
+                            data=pkl_bytes,
+                            file_name=f"best_model_{best_name.replace(' ','_')}.pkl",
+                            mime="application/octet-stream",
+                            help="Trained model file — load with PyCaret's load_model()"
+                        )
+                    else:
+                        st.info("💾 Model file not found. Re-train to generate.")
                 else:
                     if st.button("🔒 Export Model (.pkl) — Pro Only"):
                         st.warning("⚡ Upgrade to Pro to export trained models!")
             with ex3:
                 if plan_limits["export_model"]:
-                    st.info(f"💾 Saved: `best_model.pkl`")
+                    st.markdown(
+                        f'<div style="padding:.6rem 1rem;background:rgba(74,222,128,0.06);border:1px solid rgba(74,222,128,0.25);border-radius:10px;font-size:.8rem;color:{ACCENT1};">'
+                        f'💾 <b>best_model.pkl</b> ready<br>'
+                        f'<span style="color:{TEXT3};font-size:.72rem">Load: <code>load_model("best_model")</code></span>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
 
             st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
             st.markdown(f"""<div class="section-head"><div class="icon-wrap">📋</div><h3>All Models Ranked</h3></div>""", unsafe_allow_html=True)
@@ -1769,8 +1819,8 @@ if st.session_state.data is not None:
               <div class="price-main" style="color:{TEXT1}">$0</div>
               <div class="price-period">forever free</div>
               <ul class="feature-list">
-                <li class="included">3 datasets/month</li><li class="included">5 basic algorithms</li>
-                <li class="included">3-fold cross validation</li><li class="included">Basic history (3 entries)</li>
+                <li class="included">3 datasets/day</li><li class="included">8 basic algorithms</li>
+                <li class="included">1-fold cross validation</li><li class="included">Basic history (3 entries)</li>
                 <li class="not-included">XGBoost / LightGBM</li><li class="not-included">Model export (.pkl)</li>
                 <li class="not-included">Priority processing</li><li class="not-included">API access</li>
               </ul>
@@ -1790,10 +1840,10 @@ if st.session_state.data is not None:
               <div class="price-main" style="color:#4ade80">${pro_price}</div>
               <div class="price-period">/month · {pro_total} {sav_html}</div>
               <ul class="feature-list">
-                <li class="included">Unlimited datasets</li><li class="included">15+ algorithms</li>
-                <li class="included">10-fold cross validation</li><li class="included">XGBoost, LightGBM, CatBoost</li>
-                <li class="included">Export trained model (.pkl)</li><li class="included">50-entry history</li>
-                <li class="included">Priority processing queue</li><li class="not-included">API access</li>
+                <li class="included">Unlimited datasets</li><li class="included">13 algorithms</li>
+                <li class="included">10-fold cross validation</li><li class="included">XGBoost, LightGBM, CatBoost ✅</li>
+                <li class="included">Export trained model (.pkl) ✅</li><li class="included">50-entry history</li>
+                <li class="included">Priority processing</li><li class="not-included">API access (Coming Soon)</li>
               </ul>
             </div>""", unsafe_allow_html=True)
             if current_plan == "pro":
@@ -1814,7 +1864,8 @@ if st.session_state.data is not None:
               <div class="price-period">/month · {ent_total} {sav_e_html}</div>
               <ul class="feature-list">
                 <li class="included">Everything in Pro</li><li class="included">Unlimited history</li>
-                <li class="included">REST API access</li><li class="included">Unlimited team members</li>
+                <li class="included">REST API access (Coming Soon 🔜)</li>
+                <li class="included">Team members (Coming Soon 🔜)</li>
                 <li class="included">Custom model pipelines</li><li class="included">Dedicated support</li>
                 <li class="included">SLA guarantee</li><li class="included">On-premise deployment</li>
               </ul>
@@ -2021,6 +2072,8 @@ We'll verify your payment within **2-24 hours** and activate your {selected_plan
             ("Is my payment secure?", "Yes. We use established Pakistani payment networks (EasyPaisa, JazzCash, Meezan Bank). We never store card details."),
             ("What's the PKR exchange rate used?", f"We use a fixed rate of $1 = PKR 280. This is reviewed quarterly. Current effective rate: $19/mo = PKR {19*280:,.0f}/mo"),
             ("Can I upgrade from Pro to Enterprise?", "Yes! Submit a new payment for Enterprise. We'll credit the remaining Pro days."),
+            ("When will API access be available?", "API access for Enterprise is currently in development and expected in the next major release. Enterprise subscribers will get early access."),
+            ("When will Team Members feature launch?", "Team collaboration is on our roadmap for Enterprise plan. We'll notify all Enterprise users when it's ready."),
         ]
         for q, a in faqs:
             with st.expander(f"❓ {q}"):
@@ -2062,7 +2115,7 @@ else:
         <div style="font-size:1.1rem;font-weight:900;color:{TEXT1}">Free</div>
         <div style="font-size:2.5rem;font-weight:900;color:{TEXT1};margin:.5rem 0 .25rem">$0</div>
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">forever free</div>
-        <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ 3 datasets/month<br>✓ 5 basic algorithms<br>✓ 3-fold CV<br><span style="color:{TEXT3}">✗ XGBoost / LightGBM<br>✗ Model export (.pkl)<br>✗ API access</span></div>
+        <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ 3 datasets/day<br>✓ 8 basic algorithms<br>✓ 1-fold CV<br><span style="color:{TEXT3}">✗ XGBoost / LightGBM<br>✗ Model export (.pkl)<br>✗ API access</span></div>
         <div style="margin-top:1.25rem;padding:.6rem;background:rgba(107,114,128,0.12);border-radius:10px;text-align:center;font-size:.8rem;font-weight:700;color:#9ca3af">✓ Your Current Plan</div>
       </div>
       <div style="background:{CARD_BG};border:2px solid #4ade80;border-radius:20px;padding:1.75rem;position:relative;box-shadow:0 0 28px rgba(74,222,128,0.12)">
@@ -2071,7 +2124,7 @@ else:
         <div style="font-size:1.1rem;font-weight:900;color:{TEXT1}">Pro</div>
         <div style="font-size:2.5rem;font-weight:900;color:#4ade80;margin:.5rem 0 .25rem">$19<span style="font-size:1rem;font-weight:400;color:{TEXT3}">/mo</span></div>
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">or $15/mo billed annually</div>
-        <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ Unlimited datasets<br>✓ 15+ algorithms<br>✓ 10-fold CV<br>✓ XGBoost, LightGBM, CatBoost<br>✓ Export model (.pkl)<br>✓ 50-entry history</div>
+        <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ Unlimited datasets<br>✓ 13 algorithms<br>✓ 10-fold CV<br>✓ XGBoost, LightGBM, CatBoost ✅<br>✓ Export model (.pkl) ✅<br>✓ 50-entry history</div>
         <div style="margin-top:1.25rem;padding:.6rem;background:linear-gradient(135deg,rgba(74,222,128,0.15),rgba(74,222,128,0.08));border:1px solid rgba(74,222,128,0.35);border-radius:10px;text-align:center;font-size:.82rem;font-weight:800;color:#4ade80">⚡ Load a dataset → 💳 Upgrade tab</div>
       </div>
       <div style="background:{CARD_BG};border:2px solid {BORDER};border-radius:20px;padding:1.75rem">
@@ -2079,7 +2132,7 @@ else:
         <div style="font-size:1.1rem;font-weight:900;color:{TEXT1}">Enterprise</div>
         <div style="font-size:2.5rem;font-weight:900;color:#c084fc;margin:.5rem 0 .25rem">$79<span style="font-size:1rem;font-weight:400;color:{TEXT3}">/mo</span></div>
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">or $63/mo billed annually</div>
-        <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ Everything in Pro<br>✓ Unlimited history<br>✓ REST API access<br>✓ Unlimited team members<br>✓ Dedicated support<br>✓ SLA guarantee</div>
+        <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ Everything in Pro<br>✓ Unlimited history<br>✓ REST API access (Coming Soon 🔜)<br>✓ Team members (Coming Soon 🔜)<br>✓ Dedicated support<br>✓ SLA guarantee</div>
         <div style="margin-top:1.25rem;padding:.6rem;background:rgba(192,132,252,0.10);border:1px solid rgba(192,132,252,0.30);border-radius:10px;text-align:center;font-size:.82rem;font-weight:800;color:#c084fc">🏢 Load a dataset → 💳 Upgrade tab</div>
       </div>
     </div>
