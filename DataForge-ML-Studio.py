@@ -341,6 +341,17 @@ def get_plan_limits(email: str) -> dict:
     return PLAN_LIMITS[get_user_plan(email)]
 
 def can_train(email: str) -> tuple:
+    from datetime import date
+    user_plan = get_user_plan(email)
+    if user_plan != "free":
+        return True, ""
+    today_str = date.today().isoformat()
+    history = load_json(HISTORY_FILE)
+    training_log = history.get(email, {}).get("training_log", [])
+    trained_today = sum(1 for t in training_log if t.get("time", "")[:10] == today_str)
+    daily_limit = 3
+    if trained_today >= daily_limit:
+        return False, f"⛔ Daily limit reached! Free plan allows {daily_limit} datasets/day. Resets at midnight or upgrade to Pro."
     return True, ""
 
 def upgrade_user_plan(email: str, plan: str, months: int = 1):
@@ -1487,102 +1498,106 @@ if st.session_state.data is not None:
                         st.rerun()
 
             if train_clicked:
-                progress_bar = st.progress(0)
-                status_box   = st.empty()
-                warn_box     = st.empty()
-                timeline_box = st.empty()
+                can_go, block_msg = can_train(uemail_global)
+                if not can_go:
+                    st.error(block_msg)
+                    st.info("👑 Go to **💳 Upgrade** tab to get unlimited training with Pro!")
+                else:
+                    progress_bar = st.progress(0)
+                    status_box   = st.empty()
+                    warn_box     = st.empty()
+                    timeline_box = st.empty()
 
-                steps_labels = [
-                    "📦 Data Sampling & Validation",
-                    "⚙️ PyCaret Environment Setup",
-                    "🤖 Model Comparison (memory-safe)",
-                    "🏆 Best Model Selection",
-                    "💾 Saving Artifact",
-                ]
+                    steps_labels = [
+                        "📦 Data Sampling & Validation",
+                        "⚙️ PyCaret Environment Setup",
+                        "🤖 Model Comparison (memory-safe)",
+                        "🏆 Best Model Selection",
+                        "💾 Saving Artifact",
+                    ]
 
-                def render_steps(done_count):
-                    html = '<div class="step-timeline">'
-                    for i, lbl in enumerate(steps_labels):
-                        cls    = "done"   if i < done_count else ("active" if i == done_count else "")
-                        icon_s = "✓"      if i < done_count else ("◉"      if i == done_count else str(i+1))
-                        html += (
-                            f'<div class="step-item {cls}">'
-                            f'<div class="step-dot {cls}">{icon_s}</div>'
-                            f'<div><div class="step-label">{lbl}</div></div>'
-                            f'</div>'
-                        )
-                    return html + "</div>"
-
-                timeline_box.markdown(render_steps(0), unsafe_allow_html=True)
-                progress_bar.progress(5)
-                status_box.info("🚀 Training is starting...")
-
-                try:
-                    best, results, elapsed, warn_msgs, trained_rows = run_memory_safe_training(
-                        df           = df,
-                        target_col   = target_col,
-                        problem_type = ptype,
-                        train_size   = train_size,
-                        fold         = fold,
-                        normalize    = normalize,
-                        remove_out   = remove_out,
-                        has_advanced = has_advanced,
-                    )
-
-                    progress_bar.progress(100)
-                    timeline_box.markdown(render_steps(len(steps_labels)), unsafe_allow_html=True)
-
-                    st.session_state.best_model    = best
-                    st.session_state.results       = results
-                    st.session_state.training_time = elapsed
-
-                    for w in warn_msgs:
-                        warn_box.warning(w)
-
-                    if uemail_global:
-                        try:
-                            mc_log   = results.columns[0]
-                            nr_log   = results.select_dtypes(include=[np.number]).columns
-                            bm_name  = str(results.iloc[0][mc_log])
-                            bm_score = float(results.iloc[0][nr_log[0]]) if len(nr_log) else 0.0
-                            log_training(
-                                email=uemail_global,
-                                dataset=str(st.session_state.dataset_name or "Uploaded CSV"),
-                                problem_type=str(ptype), best_model=bm_name,
-                                score=bm_score, rows=trained_rows, cols=len(df.columns)
+                    def render_steps(done_count):
+                        html = '<div class="step-timeline">'
+                        for i, lbl in enumerate(steps_labels):
+                            cls    = "done"   if i < done_count else ("active" if i == done_count else "")
+                            icon_s = "✓"      if i < done_count else ("◉"      if i == done_count else str(i+1))
+                            html += (
+                                f'<div class="step-item {cls}">'
+                                f'<div class="step-dot {cls}">{icon_s}</div>'
+                                f'<div><div class="step-label">{lbl}</div></div>'
+                                f'</div>'
                             )
-                            log_activity(uemail_global, "training_complete",
-                                         f"{bm_name} | {bm_score:.4f} | {trained_rows} rows")
-                        except Exception:
-                            pass
+                        return html + "</div>"
 
-                    status_box.success(
-                        f"✅ Training complete in **{fmt_time(elapsed)}** "
-                        f"({trained_rows:,} rows) — 🏆 Check the Results tab!"
-                    )
-                    if not has_advanced:
-                        st.info("💡 Upgrade to Pro for XGBoost, LightGBM, and CatBoost!")
-                    st.balloons()
+                    timeline_box.markdown(render_steps(0), unsafe_allow_html=True)
+                    progress_bar.progress(5)
+                    status_box.info("🚀 Training is starting...")
 
-                except MemoryError as me:
-                    progress_bar.progress(0)
-                    timeline_box.empty()
-                    status_box.error(
-                        f"💥 **Memory Overflow!**  \n{str(me)}  \n\n"
-                        f"**Quick fixes:**  \n"
-                        f"- Dataset ko {MAX_ROWS_TRAINING:,} rows se kam karo  \n"
-                        f"- Page refresh karo (Ctrl+R) aur dobara try karo  \n"
-                        f"- CV Folds ko 2 par set karo"
-                    )
-                except Exception as e:
-                    progress_bar.progress(0)
-                    timeline_box.empty()
-                    err_str = str(e)
-                    if any(kw in err_str.lower() for kw in ["memory","killed","oom","cannot allocate"]):
-                        status_box.error("💥 **Memory Crash!** Dataset chota karo aur page refresh karo.")
-                    else:
-                        status_box.error(f"❌ Training failed: {err_str}")
+                    try:
+                        best, results, elapsed, warn_msgs, trained_rows = run_memory_safe_training(
+                            df           = df,
+                            target_col   = target_col,
+                            problem_type = ptype,
+                            train_size   = train_size,
+                            fold         = fold,
+                            normalize    = normalize,
+                            remove_out   = remove_out,
+                            has_advanced = has_advanced,
+                        )
 
+                        progress_bar.progress(100)
+                        timeline_box.markdown(render_steps(len(steps_labels)), unsafe_allow_html=True)
+
+                        st.session_state.best_model    = best
+                        st.session_state.results       = results
+                        st.session_state.training_time = elapsed
+
+                        for w in warn_msgs:
+                            warn_box.warning(w)
+
+                        if uemail_global:
+                            try:
+                                mc_log   = results.columns[0]
+                                nr_log   = results.select_dtypes(include=[np.number]).columns
+                                bm_name  = str(results.iloc[0][mc_log])
+                                bm_score = float(results.iloc[0][nr_log[0]]) if len(nr_log) else 0.0
+                                log_training(
+                                    email=uemail_global,
+                                    dataset=str(st.session_state.dataset_name or "Uploaded CSV"),
+                                    problem_type=str(ptype), best_model=bm_name,
+                                    score=bm_score, rows=trained_rows, cols=len(df.columns)
+                                )
+                                log_activity(uemail_global, "training_complete",
+                                            f"{bm_name} | {bm_score:.4f} | {trained_rows} rows")
+                            except Exception:
+                                pass
+
+                        status_box.success(
+                            f"✅ Training complete in **{fmt_time(elapsed)}** "
+                            f"({trained_rows:,} rows) — 🏆 Check the Results tab!"
+                        )
+                        if not has_advanced:
+                            st.info("💡 Upgrade to Pro for XGBoost, LightGBM, and CatBoost!")
+                        st.balloons()
+
+                    except MemoryError as me:
+                        progress_bar.progress(0)
+                        timeline_box.empty()
+                        status_box.error(
+                            f"💥 **Memory Overflow!**  \n{str(me)}  \n\n"
+                            f"**Quick fixes:**  \n"
+                            f"- Dataset ko {MAX_ROWS_TRAINING:,} rows se kam karo  \n"
+                            f"- Page refresh karo (Ctrl+R) aur dobara try karo  \n"
+                            f"- CV Folds ko 2 par set karo"
+                        )
+                    except Exception as e:
+                        progress_bar.progress(0)
+                        timeline_box.empty()
+                        err_str = str(e)
+                        if any(kw in err_str.lower() for kw in ["memory","killed","oom","cannot allocate"]):
+                            status_box.error("💥 **Memory Crash!** Dataset chota karo aur page refresh karo.")
+                        else:
+                            status_box.error(f"❌ Training failed: {err_str}")
     # ═══════════════════════════
     # TAB 4 — RESULTS
     # ═══════════════════════════
