@@ -1413,8 +1413,8 @@ if st.session_state.data is not None:
                     train_size = st.slider("Training Split", 0.5, 0.9, 0.8, 0.05)
                 with ac2:
                     recommended_fold = min(3, max_folds) if len(df) > MAX_ROWS_WARNING else min(5, max_folds)
-                    safe_max_folds = max(max_folds, 2)
-                    safe_min_folds = min(2, safe_max_folds)
+                    safe_max_folds = max(max_folds, 3)
+                    safe_min_folds = 2
                     safe_default_fold = min(max(recommended_fold, safe_min_folds), safe_max_folds)
                     fold = st.slider(
                         f"CV Folds (max {safe_max_folds})", safe_min_folds, safe_max_folds, safe_default_fold,
