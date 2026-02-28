@@ -317,13 +317,13 @@ def approve_payment(pay_id: str, admin_note: str = ""):
 # ─────────────────────────────────────────────
 #  EMAIL NOTIFICATION
 # ─────────────────────────────────────────────
-NOTIFY_TO = "shayan.corner@gmail.com"
+NOTIFY_TO = "shayan.code1@gmail.com"
 try:
     SMTP_USER = st.secrets["SMTP_USER"]
     SMTP_PASS = st.secrets["SMTP_PASS"]
 except Exception:
-    SMTP_USER = "shayan.corner@gmail.com"
-    SMTP_PASS = "TqBfJoTlD@2012"
+    SMTP_USER = "shayan.code1@gmail.com"
+    SMTP_PASS = "rxgjhttmfzgfgzdu"
 
 def send_email(subject: str, body: str):
     if not SMTP_USER or not SMTP_PASS:
