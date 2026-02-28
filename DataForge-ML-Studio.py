@@ -932,9 +932,9 @@ with st.sidebar:
         <div style="background:{"rgba(255,255,255,0.03)" if T=="dark" else "rgba(0,0,0,0.03)"};border:1px solid {BORDER};border-radius:10px;padding:.75rem 1rem;margin-bottom:.75rem">
         <div style="font-size:.62rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{TEXT3};margin-bottom:.5rem">🌱 Free Plan Limits</div>
         <div style="display:flex;flex-direction:column;gap:.3rem">
-            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">📂 Datasets/day</span><span style="color:{ACCENTR};font-weight:700">3</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">📂 Datasets/day</span><span style="color:{ACCENTR};font-weight:700">1</span></div>
             <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">🤖 Algorithms</span><span style="color:{ACCENTR};font-weight:700">5 basic</span></div>
-            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">🔁 CV Folds</span><span style="color:{ACCENTR};font-weight:700">max 3</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">🔁 CV Folds</span><span style="color:{ACCENTR};font-weight:700">max 1</span></div>
             <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">📜 History</span><span style="color:{ACCENTR};font-weight:700">3 entries</span></div>
             <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">⚡ XGBoost</span><span style="color:{ACCENTR};font-weight:700">🔒 locked</span></div>
             <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">💾 Export .pkl</span><span style="color:{ACCENTR};font-weight:700">🔒 locked</span></div>
