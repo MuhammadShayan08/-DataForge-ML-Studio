@@ -1377,7 +1377,7 @@ if st.session_state.data is not None:
                     fig = px.bar(x=vc.index, y=vc.values, color=vc.values, color_continuous_scale=[ACCENT2, ACCENT1], template=CHART_TEMPLATE, title=f"Top values · {col_pick}")
                     fig.update_layout(showlegend=False, coloraxis_showscale=False)
                 fig.update_layout(**chart_layout(height=340))
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
             with cv2:
                 s = df[col_pick]
@@ -1831,7 +1831,7 @@ if st.session_state.data is not None:
               <div class="price-period">forever free</div>
               <ul class="feature-list">
                 <li class="included">3 datasets/day</li><li class="included">8 basic algorithms</li>
-                <li class="included">1-fold cross validation</li><li class="included">Basic history (3 entries)</li>
+                <li class="included">2-fold cross validation</li><li class="included">Basic history (3 entries)</li>
                 <li class="not-included">XGBoost / LightGBM</li><li class="not-included">Model export (.pkl)</li>
                 <li class="not-included">Priority processing</li><li class="not-included">API access</li>
               </ul>
@@ -2126,7 +2126,7 @@ else:
         <div style="font-size:1.1rem;font-weight:900;color:{TEXT1}">Free</div>
         <div style="font-size:2.5rem;font-weight:900;color:{TEXT1};margin:.5rem 0 .25rem">$0</div>
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">forever free</div>
-        <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ 3 datasets/day<br>✓ 8 basic algorithms<br>✓ 1-fold CV<br><span style="color:{TEXT3}">✗ XGBoost / LightGBM<br>✗ Model export (.pkl)<br>✗ API access</span></div>
+        <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ 3 datasets/day<br>✓ 8 basic algorithms<br>✓ 2-fold CV<br><span style="color:{TEXT3}">✗ XGBoost / LightGBM<br>✗ Model export (.pkl)<br>✗ API access</span></div>
         <div style="margin-top:1.25rem;padding:.6rem;background:rgba(107,114,128,0.12);border-radius:10px;text-align:center;font-size:.8rem;font-weight:700;color:#9ca3af">✓ Your Current Plan</div>
       </div>
       <div style="background:{CARD_BG};border:2px solid #4ade80;border-radius:20px;padding:1.75rem;position:relative;box-shadow:0 0 28px rgba(74,222,128,0.12)">
