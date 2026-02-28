@@ -324,7 +324,7 @@ try:
     SMTP_PASS = st.secrets["SMTP_PASS"]
 except Exception:
     SMTP_USER = "shayan.code1@gmail.com"
-    SMTP_PASS = "TqBfJoTlD@2012"
+    SMTP_PASS = "kiuabeuhkmwfpjie"
 
 def send_email(subject: str, body: str):
     """Send email notification. Logs errors to dataforge_email_log.json for debugging."""
