@@ -1,20 +1,11 @@
-# Web Framework
-streamlit>=1.30.0
-
-# Data Manipulation
-pandas>=2.0.0
-numpy>=1.24.0,<2.0.0
-
-# Machine Learning (AutoML)
-pycaret>=3.2.0
-
-# Visualization
-plotly>=5.18.0
-
-# Excel support
-openpyxl
-xlrd
-
-# Utilities
-scikit-learn>=1.2.0,<1.5.0
+streamlit>=1.28.0
+pandas
+numpy
+plotly
+pycaret[full]
+xgboost
+lightgbm
+catboost
+scikit-learn
 psutil
+openpyxl
