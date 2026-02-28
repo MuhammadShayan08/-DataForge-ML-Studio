@@ -14,7 +14,7 @@ from pycaret.regression import (
     setup as reg_setup, compare_models as reg_compare,
     pull as reg_pull, save_model as reg_save,
 )
-import warnings, time, io, smtplib, json, os, hashlib, secrets
+import warnings, time, io, smtplib, json, os, hashlib, secrets, gc
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
@@ -28,8 +28,8 @@ st.set_page_config(page_title="DataForge ML Studio", page_icon="⚡", layout="wi
 USERS_FILE   = "dataforge_users.json"
 HISTORY_FILE = "dataforge_history.json"
 TOKENS_FILE  = "dataforge_tokens.json"
-PAYMENTS_FILE  = "dataforge_payments.json"   # NEW: Payment records
-ADMIN_EMAILS   = {"shayan.code1@gmail.com"}  # Add more admin emails here
+PAYMENTS_FILE  = "dataforge_payments.json"
+ADMIN_EMAILS   = {"shayan.code1@gmail.com"}
 
 def load_json(path):
     if os.path.exists(path):
@@ -45,48 +45,162 @@ def save_json(path, data):
         json.dump(data, f, indent=2)
 
 # ─────────────────────────────────────────────
-#  PRICING CONFIG — SINGLE SOURCE OF TRUTH
+#  MEMORY-SAFE TRAINING CONFIG
+# ─────────────────────────────────────────────
+MAX_ROWS_TRAINING   = 5_000
+MAX_ROWS_WARNING    = 2_000
+SAMPLE_RANDOM_STATE = 42
+
+SAFE_CLF_MODELS      = ["lr","dt","rf","et","ridge","knn","nb","ada"]
+ADVANCED_CLF_MODELS  = ["lr","dt","rf","et","ridge","knn","nb","ada","xgboost","lightgbm","catboost","gbc","lda"]
+SAFE_REG_MODELS      = ["lr","dt","rf","et","ridge","lasso","knn","ada","en"]
+ADVANCED_REG_MODELS  = ["lr","dt","rf","et","ridge","lasso","knn","ada","en","xgboost","lightgbm","catboost","gbr","br"]
+BLACKLISTED_FREE     = ["xgboost","lightgbm","catboost","svm","rbfsvm","mlp","gpc"]
+
+def get_memory_usage_mb() -> float:
+    try:
+        import psutil
+        return psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
+    except Exception:
+        return 0.0
+
+def force_gc():
+    gc.collect(); gc.collect()
+    try:
+        import ctypes
+        ctypes.cdll.LoadLibrary("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+def smart_sample(df: pd.DataFrame, target_col: str, max_rows: int = MAX_ROWS_TRAINING) -> pd.DataFrame:
+    if len(df) <= max_rows:
+        return df
+    try:
+        target_series = df[target_col]
+        if target_series.dtype == "object" or target_series.nunique() <= 20:
+            from sklearn.model_selection import train_test_split
+            _, sampled = train_test_split(
+                df, test_size=max_rows / len(df),
+                stratify=target_series, random_state=SAMPLE_RANDOM_STATE
+            )
+            return sampled.reset_index(drop=True)
+    except Exception:
+        pass
+    return df.sample(n=max_rows, random_state=SAMPLE_RANDOM_STATE).reset_index(drop=True)
+
+def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
+                              normalize, remove_out, has_advanced):
+    warnings_list = []
+    t0 = time.time()
+
+    # ── Sampling ──
+    original_rows = len(df)
+    if original_rows > MAX_ROWS_TRAINING:
+        df_train = smart_sample(df, target_col, MAX_ROWS_TRAINING)
+        warnings_list.append(
+            f"⚠️ Dataset {original_rows:,} rows tha — Streamlit Cloud free tier ke liye "
+            f"**{MAX_ROWS_TRAINING:,} rows** par auto-sample kar diya. "
+            f"Accuracy thodi kam ho sakti hai lekin crash nahi hoga."
+        )
+    elif original_rows > MAX_ROWS_WARNING:
+        df_train = df.copy()
+        warnings_list.append(
+            f"💡 Dataset {original_rows:,} rows — training chal jayegi lekin agar crash ho toh "
+            f"{MAX_ROWS_WARNING:,} rows tak chota karo."
+        )
+    else:
+        df_train = df.copy()
+
+    # ── Model list ──
+    if problem_type == "classification":
+        include_models = ADVANCED_CLF_MODELS if has_advanced else SAFE_CLF_MODELS
+    else:
+        include_models = ADVANCED_REG_MODELS if has_advanced else SAFE_REG_MODELS
+    if not has_advanced:
+        include_models = [m for m in include_models if m not in BLACKLISTED_FREE]
+
+    # ── Memory check ──
+    mem_before = get_memory_usage_mb()
+    if mem_before > 400:
+        force_gc()
+
+    # ── PyCaret setup ──
+    setup_kwargs = dict(
+        data=df_train, target=target_col,
+        train_size=float(train_size), fold=int(fold),
+        normalize=normalize, verbose=False, html=False,
+        session_id=42, n_jobs=1, use_gpu=False,
+    )
+    if remove_out and problem_type == "regression" and len(df_train) > 100:
+        setup_kwargs["remove_outliers"] = True
+
+    try:
+        if problem_type == "classification":
+            clf_setup(**setup_kwargs)
+            pull_fn, save_fn, cmp_fn = clf_pull, clf_save, clf_compare
+        else:
+            reg_setup(**setup_kwargs)
+            pull_fn, save_fn, cmp_fn = reg_pull, reg_save, reg_compare
+    except Exception as e:
+        err = str(e).lower()
+        if "memory" in err or "killed" in err:
+            raise MemoryError(f"Setup mein memory khatam — dataset {MAX_ROWS_WARNING:,} rows se kam karo.")
+        raise
+
+    force_gc()
+
+    # ── Compare models ──
+    try:
+        best = cmp_fn(verbose=False, n_select=1, include=include_models, errors="raise")
+        results = pull_fn()
+    except MemoryError:
+        force_gc()
+        light = ["lr","dt","ridge"]
+        warnings_list.append(
+            "⚠️ Full comparison mein memory issue — sirf 3 lightest models se try kar raha hoon."
+        )
+        best = cmp_fn(verbose=False, n_select=1, include=light)
+        results = pull_fn()
+    except Exception as e:
+        err = str(e).lower()
+        if any(k in err for k in ["memory","killed","oom","cannot allocate"]):
+            raise MemoryError("Model comparison mein memory khatam — dataset chota karo.")
+        raise
+
+    # ── Save ──
+    try:
+        save_fn(best, "best_model")
+    except Exception:
+        pass
+
+    force_gc()
+    elapsed = time.time() - t0
+    return best, results, elapsed, warnings_list, len(df_train)
+
+
+# ─────────────────────────────────────────────
+#  PRICING CONFIG
 # ─────────────────────────────────────────────
 PRICING = {
     "pro": {
-        "name": "Pro",
-        "icon": "⚡",
-        "monthly_price": 19,
-        "annual_price": 15,   # per month when billed annually
-        "annual_total": 180,
-        "color": "#4ade80",
+        "name": "Pro", "icon": "⚡",
+        "monthly_price": 19, "annual_price": 15,
+        "annual_total": 180, "color": "#4ade80",
         "features": [
-            "Unlimited datasets per month",
-            "15+ ML algorithms",
-            "10-fold cross-validation",
-            "XGBoost, LightGBM, CatBoost",
-            "Export trained models (.pkl)",
-            "50-entry training history",
-            "Priority processing queue",
-            "Email support",
+            "Unlimited datasets per month","15+ ML algorithms","10-fold cross-validation",
+            "XGBoost, LightGBM, CatBoost","Export trained models (.pkl)",
+            "50-entry training history","Priority processing queue","Email support",
         ],
-        "not_included": [
-            "API access",
-            "Team collaboration",
-            "Dedicated support",
-        ]
+        "not_included": ["API access","Team collaboration","Dedicated support"]
     },
     "enterprise": {
-        "name": "Enterprise",
-        "icon": "🏢",
-        "monthly_price": 79,
-        "annual_price": 63,
-        "annual_total": 756,
-        "color": "#c084fc",
+        "name": "Enterprise", "icon": "🏢",
+        "monthly_price": 79, "annual_price": 63,
+        "annual_total": 756, "color": "#c084fc",
         "features": [
-            "Everything in Pro",
-            "Unlimited history",
-            "REST API access",
-            "Unlimited team members",
-            "Custom model pipelines",
-            "Dedicated support channel",
-            "SLA guarantee",
-            "On-premise deployment option",
+            "Everything in Pro","Unlimited history","REST API access",
+            "Unlimited team members","Custom model pipelines",
+            "Dedicated support channel","SLA guarantee","On-premise deployment option",
         ],
         "not_included": []
     }
@@ -94,10 +208,8 @@ PRICING = {
 
 PAYMENT_METHODS = {
     "easypaisa": {
-        "name": "EasyPaisa",
-        "icon": "📱",
-        "number": "0300-1234567",
-        "account_name": "DataForge Studio",
+        "name": "EasyPaisa", "icon": "📱",
+        "number": "0300-1234567", "account_name": "DataForge Studio",
         "instructions": [
             "Open EasyPaisa app on your phone",
             "Go to 'Send Money' → 'Mobile Account'",
@@ -109,10 +221,8 @@ PAYMENT_METHODS = {
         ]
     },
     "jazzcash": {
-        "name": "JazzCash",
-        "icon": "💸",
-        "number": "0333-7654321",
-        "account_name": "DataForge Studio",
+        "name": "JazzCash", "icon": "💸",
+        "number": "0333-7654321", "account_name": "DataForge Studio",
         "instructions": [
             "Open JazzCash app on your phone",
             "Go to 'Send Money' → 'Mobile Account'",
@@ -124,12 +234,9 @@ PAYMENT_METHODS = {
         ]
     },
     "bank_transfer": {
-        "name": "Bank Transfer",
-        "icon": "🏦",
-        "bank": "Meezan Bank",
-        "account_title": "DataForge Technologies",
-        "account_number": "01234567890123",
-        "iban": "PK36MEZN0001234567890123",
+        "name": "Bank Transfer", "icon": "🏦",
+        "bank": "Meezan Bank", "account_title": "DataForge Technologies",
+        "account_number": "01234567890123", "iban": "PK36MEZN0001234567890123",
         "branch": "Lahore Main Branch",
         "instructions": [
             "Go to your bank app or branch",
@@ -143,8 +250,7 @@ PAYMENT_METHODS = {
         ]
     },
     "card": {
-        "name": "Debit/Credit Card",
-        "icon": "💳",
+        "name": "Debit/Credit Card", "icon": "💳",
         "instructions": [
             "Card payments via Stripe are coming soon!",
             "For now, please use EasyPaisa, JazzCash, or Bank Transfer.",
@@ -154,7 +260,7 @@ PAYMENT_METHODS = {
 }
 
 # ─────────────────────────────────────────────
-#  PERSISTENT LOGIN — TOKEN SYSTEM
+#  TOKEN SYSTEM
 # ─────────────────────────────────────────────
 TOKEN_EXPIRY_DAYS = 30
 
@@ -198,40 +304,19 @@ def now_str():
 # ─────────────────────────────────────────────
 PLAN_LIMITS = {
     "free": {
-        "datasets_per_month": 3,
-        "max_algorithms":     5,
-        "cv_folds_max":       3,
-        "history_entries":    3,
-        "advanced_models":    False,
-        "export_model":       False,
-        "full_history":       False,
-        "priority_queue":     False,
-        "api_access":         False,
-        "team_members":       1,
+        "datasets_per_month": 3, "max_algorithms": 5, "cv_folds_max": 3,
+        "history_entries": 3, "advanced_models": False, "export_model": False,
+        "full_history": False, "priority_queue": False, "api_access": False, "team_members": 1,
     },
     "pro": {
-        "datasets_per_month": 999999,
-        "max_algorithms":     15,
-        "cv_folds_max":       10,
-        "history_entries":    50,
-        "advanced_models":    True,
-        "export_model":       True,
-        "full_history":       True,
-        "priority_queue":     True,
-        "api_access":         False,
-        "team_members":       1,
+        "datasets_per_month": 999999, "max_algorithms": 15, "cv_folds_max": 10,
+        "history_entries": 50, "advanced_models": True, "export_model": True,
+        "full_history": True, "priority_queue": True, "api_access": False, "team_members": 1,
     },
     "enterprise": {
-        "datasets_per_month": 999999,
-        "max_algorithms":     15,
-        "cv_folds_max":       10,
-        "history_entries":    999999,
-        "advanced_models":    True,
-        "export_model":       True,
-        "full_history":       True,
-        "priority_queue":     True,
-        "api_access":         True,
-        "team_members":       999999,
+        "datasets_per_month": 999999, "max_algorithms": 15, "cv_folds_max": 10,
+        "history_entries": 999999, "advanced_models": True, "export_model": True,
+        "full_history": True, "priority_queue": True, "api_access": True, "team_members": 999999,
     },
 }
 
@@ -253,8 +338,7 @@ def get_user_plan(email: str) -> str:
     return plan if plan in PLAN_LIMITS else "free"
 
 def get_plan_limits(email: str) -> dict:
-    plan = get_user_plan(email)
-    return PLAN_LIMITS[plan]
+    return PLAN_LIMITS[get_user_plan(email)]
 
 def can_train(email: str) -> tuple:
     return True, ""
@@ -273,24 +357,14 @@ def upgrade_user_plan(email: str, plan: str, months: int = 1):
 # ─────────────────────────────────────────────
 #  PAYMENT FUNCTIONS
 # ─────────────────────────────────────────────
-def save_payment_request(email: str, plan: str, billing: str, amount: float,
-                          payment_method: str, txn_id: str, user_name: str) -> str:
-    """Save a pending payment request. Returns payment ID."""
+def save_payment_request(email, plan, billing, amount, payment_method, txn_id, user_name):
     payments = load_json(PAYMENTS_FILE)
     pay_id = f"PAY-{secrets.token_hex(4).upper()}"
     payments[pay_id] = {
-        "id": pay_id,
-        "email": email,
-        "name": user_name,
-        "plan": plan,
-        "billing": billing,
-        "amount": amount,
-        "payment_method": payment_method,
-        "txn_id": txn_id,
-        "status": "pending",   # pending | approved | rejected
-        "submitted_at": now_str(),
-        "processed_at": None,
-        "admin_note": ""
+        "id": pay_id, "email": email, "name": user_name, "plan": plan,
+        "billing": billing, "amount": amount, "payment_method": payment_method,
+        "txn_id": txn_id, "status": "pending", "submitted_at": now_str(),
+        "processed_at": None, "admin_note": ""
     }
     save_json(PAYMENTS_FILE, payments)
     return pay_id
@@ -301,13 +375,11 @@ def get_user_payments(email: str) -> list:
     return sorted(user_pays, key=lambda x: x.get("submitted_at",""), reverse=True)
 
 def approve_payment(pay_id: str, admin_note: str = ""):
-    """Admin approves a payment — upgrades user plan."""
     payments = load_json(PAYMENTS_FILE)
     if pay_id not in payments:
         return False
     pay = payments[pay_id]
-    billing = pay.get("billing", "monthly")
-    months = 12 if billing == "annual" else 1
+    months = 12 if pay.get("billing","monthly") == "annual" else 1
     upgrade_user_plan(pay["email"], pay["plan"], months)
     payments[pay_id]["status"] = "approved"
     payments[pay_id]["processed_at"] = now_str()
@@ -316,7 +388,7 @@ def approve_payment(pay_id: str, admin_note: str = ""):
     return True
 
 # ─────────────────────────────────────────────
-#  EMAIL NOTIFICATION
+#  EMAIL
 # ─────────────────────────────────────────────
 NOTIFY_TO = "shayan.code1@gmail.com"
 try:
@@ -327,7 +399,6 @@ except Exception:
     SMTP_PASS = "kiuabeuhkmwfpjie"
 
 def send_email(subject: str, body: str):
-    """Send email notification. Logs errors to dataforge_email_log.json for debugging."""
     if not SMTP_USER or not SMTP_PASS:
         log = load_json("dataforge_email_log.json")
         log[now_str()] = {"subject": subject, "body": body, "error": "No SMTP credentials"}
@@ -336,18 +407,14 @@ def send_email(subject: str, body: str):
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"]    = SMTP_USER
-        msg["To"]      = NOTIFY_TO
-        # Plain text part
+        msg["From"] = SMTP_USER
+        msg["To"] = NOTIFY_TO
         msg.attach(MIMEText(body, "plain", "utf-8"))
-        # HTML part — nicer formatting
-        html_body = f"""
-        <html><body style="font-family:monospace;background:#0a0a0a;color:#e5e7eb;padding:24px">
+        html_body = f"""<html><body style="font-family:monospace;background:#0a0a0a;color:#e5e7eb;padding:24px">
         <div style="max-width:500px;margin:auto;background:#111;border:1px solid #222;border-radius:12px;padding:24px">
         <pre style="white-space:pre-wrap;font-size:13px;color:#d1fae5;margin:0">{body}</pre>
         </div></body></html>"""
         msg.attach(MIMEText(html_body, "html", "utf-8"))
-        # Try SSL first (port 465), fallback to STARTTLS (port 587)
         sent = False
         last_err = None
         for port, use_ssl in [(465, True), (587, False)]:
@@ -358,9 +425,7 @@ def send_email(subject: str, body: str):
                         server.sendmail(SMTP_USER, NOTIFY_TO, msg.as_string())
                 else:
                     with smtplib.SMTP("smtp.gmail.com", port, timeout=10) as server:
-                        server.ehlo()
-                        server.starttls()
-                        server.ehlo()
+                        server.ehlo(); server.starttls(); server.ehlo()
                         server.login(SMTP_USER, SMTP_PASS)
                         server.sendmail(SMTP_USER, NOTIFY_TO, msg.as_string())
                 sent = True
@@ -370,24 +435,18 @@ def send_email(subject: str, body: str):
                 continue
         if not sent:
             raise last_err
-        # Log success
         log = load_json("dataforge_email_log.json")
         log[now_str()] = {"subject": subject, "status": "sent_ok"}
         save_json("dataforge_email_log.json", log)
         return True
     except Exception as e:
-        # Save full error for debugging
         log = load_json("dataforge_email_log.json")
         log[now_str()] = {
-            "subject": subject,
-            "body": body[:500],
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "smtp_user": SMTP_USER,
+            "subject": subject, "body": body[:500], "error": str(e),
+            "error_type": type(e).__name__, "smtp_user": SMTP_USER,
             "note": (
                 "IMPORTANT: Gmail requires an App Password, NOT your regular password. "
-                "Go to myaccount.google.com → Security → 2-Step Verification → App passwords. "
-                "Generate one for 'Mail' and use that 16-char code as SMTP_PASS."
+                "Go to myaccount.google.com → Security → 2-Step Verification → App passwords."
             )
         }
         save_json("dataforge_email_log.json", log)
@@ -411,8 +470,7 @@ def notify_signup(user: dict):
 def notify_signin(user: dict):
     subject = f"🔑 DataForge — Sign In: {user['name']} ({user['email']})"
     history = load_json(HISTORY_FILE)
-    u_hist = history.get(user['email'], {})
-    login_count = u_hist.get("login_count", 0)
+    login_count = history.get(user['email'], {}).get("login_count", 0)
     body = f"""
 ╔══════════════════════════════════════════╗
    ⚡ DataForge ML Studio — SIGN IN
@@ -424,8 +482,7 @@ def notify_signin(user: dict):
 ══════════════════════════════════════════"""
     send_email(subject, body)
 
-def notify_payment_submitted(user_name: str, email: str, plan: str, amount: float,
-                              method: str, txn_id: str, pay_id: str):
+def notify_payment_submitted(user_name, email, plan, amount, method, txn_id, pay_id):
     subject = f"💳 DataForge — NEW PAYMENT: {user_name} | {plan.upper()} | PKR {amount:,.0f}"
     body = f"""
 ╔══════════════════════════════════════════╗
@@ -440,14 +497,11 @@ def notify_payment_submitted(user_name: str, email: str, plan: str, amount: floa
  Method     : {method}
  Txn ID     : {txn_id}
  Status     : PENDING — Action Required
-
- To approve: Run approve_payment("{pay_id}")
- in the Admin section of the app.
 ══════════════════════════════════════════"""
     return send_email(subject, body)
 
 # ─────────────────────────────────────────────
-#  USER HISTORY HELPERS
+#  HISTORY HELPERS
 # ─────────────────────────────────────────────
 def get_user_history(email: str) -> dict:
     history = load_json(HISTORY_FILE)
@@ -476,7 +530,7 @@ def log_activity(email: str, action: str, detail: str = ""):
     history[email]["activity_log"] = history[email]["activity_log"][-100:]
     save_json(HISTORY_FILE, history)
 
-def log_training(email: str, dataset: str, problem_type: str, best_model: str, score: float, rows: int, cols: int):
+def log_training(email, dataset, problem_type, best_model, score, rows, cols):
     history = load_json(HISTORY_FILE)
     if email not in history:
         history[email] = {"training_log": [], "activity_log": [], "login_count": 0, "datasets_trained": 0}
@@ -643,8 +697,6 @@ section[data-testid="stSidebar"] .stButton>button{{background:{"linear-gradient(
 div[data-testid="column"]:nth-child(2) .stButton>button{{background:{BG2 if T=="dark" else "#ffffff"} !important;color:{TEXT1} !important;border:1px solid {BORDER} !important;box-shadow:{"0 2px 8px rgba(0,0,0,0.4)" if T=="dark" else "0 2px 8px rgba(0,0,0,0.12)"} !important;font-weight:600 !important;}}
 div[data-testid="column"]:nth-child(3) .stButton>button{{background:{BG2 if T=="dark" else "#ffffff"} !important;color:{TEXT1} !important;border:1px solid {BORDER} !important;font-weight:600 !important;}}
 div[data-testid="column"]:nth-child(3) .stButton>button:hover{{border-color:{ACCENTR} !important;color:{ACCENTR} !important;}}
-
-/* ── PRICING CARDS ── */
 .pricing-card{{background:{CARD_BG};border:2px solid {BORDER};border-radius:24px;padding:2rem;position:relative;overflow:hidden;transition:all 0.3s ease !important;}}
 .pricing-card:hover{{transform:translateY(-6px);box-shadow:{"0 0 40px rgba(74,222,128,0.20)" if T=="dark" else "0 12px 40px rgba(124,58,237,0.22)"};}}
 .pricing-card.popular{{border-color:{"#4ade80" if T=="dark" else "#7c3aed"};box-shadow:{"0 0 30px rgba(74,222,128,0.15)" if T=="dark" else "0 8px 30px rgba(124,58,237,0.18)"};}}
@@ -659,25 +711,18 @@ div[data-testid="column"]:nth-child(3) .stButton>button:hover{{border-color:{ACC
 .pricing-card .feature-list li.included::before{{content:'✓';color:{ACCENT1};font-weight:800;font-size:.9rem;}}
 .pricing-card .feature-list li.not-included{{color:{TEXT3};opacity:.6;}}
 .pricing-card .feature-list li.not-included::before{{content:'✗';color:{TEXT3};font-weight:800;}}
-
-/* ── PAYMENT METHOD CARDS ── */
 .pay-method-card{{background:{BG3};border:2px solid {BORDER};border-radius:16px;padding:1.25rem;cursor:pointer;transition:all 0.2s ease !important;text-align:center;}}
 .pay-method-card:hover{{border-color:{ACCENT1};transform:translateY(-3px);box-shadow:{"0 8px 24px rgba(74,222,128,0.18)" if T=="dark" else "0 8px 24px rgba(124,58,237,0.18)"};}}
 .pay-method-card.selected{{border-color:{ACCENT1};background:{"rgba(74,222,128,0.08)" if T=="dark" else "rgba(124,58,237,0.08)"};}}
 .pay-method-card .pm-icon{{font-size:2rem;margin-bottom:.4rem;}}
 .pay-method-card .pm-name{{font-size:.85rem;font-weight:700;color:{TEXT1};}}
-
-/* ── PAYMENT STATUS ── */
 .pay-status-pending{{background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.35);border-radius:12px;padding:.6rem 1rem;display:inline-flex;align-items:center;gap:.5rem;font-size:.8rem;font-weight:700;color:{ACCENTY};}}
 .pay-status-approved{{background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.35);border-radius:12px;padding:.6rem 1rem;display:inline-flex;align-items:center;gap:.5rem;font-size:.8rem;font-weight:700;color:{ACCENT1};}}
 .pay-status-rejected{{background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.35);border-radius:12px;padding:.6rem 1rem;display:inline-flex;align-items:center;gap:.5rem;font-size:.8rem;font-weight:700;color:{ACCENTR};}}
-
-/* PLAN BADGE */
 .plan-badge{{display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .85rem;border-radius:999px;font-size:.72rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;}}
 .plan-badge.free{{background:rgba(107,114,128,0.15);color:#9ca3af;border:1px solid rgba(107,114,128,0.3);}}
 .plan-badge.pro{{background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.4);}}
 .plan-badge.enterprise{{background:rgba(192,132,252,0.15);color:#c084fc;border:1px solid rgba(192,132,252,0.4);}}
-
 .upgrade-wall{{background:{"rgba(251,191,36,0.06)" if T=="dark" else "rgba(251,191,36,0.08)"};border:2px dashed {"rgba(251,191,36,0.40)" if T=="dark" else "rgba(251,191,36,0.50)"};border-radius:16px;padding:2rem;text-align:center;margin:1rem 0;}}
 .hero-wrap{{min-height:45vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:4rem 2rem;}}
 .hero-wrap h1{{font-size:3.8rem;font-weight:900;letter-spacing:-.04em;background:{HERO_H1_GRAD};-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin:0 0 1rem;line-height:1.05;}}
@@ -690,8 +735,6 @@ div[data-testid="column"]:nth-child(3) .stButton>button:hover{{border-color:{ACC
 .stAlert{{border-radius:12px !important;border-left-width:4px !important;background:{CARD_BG} !important;}}
 @keyframes slideUp{{from{{opacity:0;transform:translateY(18px)}}to{{opacity:1;transform:none}}}}
 .slide-up{{animation:slideUp .45s ease-out both;}}
-
-/* INSTRUCTIONS BOX */
 .instructions-box{{background:{BG3};border:1px solid {BORDER};border-radius:16px;padding:1.5rem;margin:1rem 0;}}
 .instructions-box .inst-title{{font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{TEXT3};margin-bottom:1rem;}}
 .instructions-box ol{{padding-left:1.25rem;margin:0;}}
@@ -725,12 +768,10 @@ if not st.session_state.authenticated:
 
         mode_col1, mode_col2 = st.columns(2)
         with mode_col1:
-            signin_active = st.session_state.auth_mode == "signin"
-            if st.button("🔑 Sign In", key="tab_signin", type="primary" if signin_active else "secondary"):
+            if st.button("🔑 Sign In", key="tab_signin", type="primary" if st.session_state.auth_mode=="signin" else "secondary"):
                 st.session_state.auth_mode = "signin"; st.rerun()
         with mode_col2:
-            signup_active = st.session_state.auth_mode == "signup"
-            if st.button("✨ Create Account", key="tab_signup", type="primary" if signup_active else "secondary"):
+            if st.button("✨ Create Account", key="tab_signup", type="primary" if st.session_state.auth_mode=="signup" else "secondary"):
                 st.session_state.auth_mode = "signup"; st.rerun()
 
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
@@ -812,7 +853,7 @@ if not st.session_state.authenticated:
     st.stop()
 
 # ─────────────────────────────────────────────
-#  GET CURRENT USER (after auth)
+#  CURRENT USER
 # ─────────────────────────────────────────────
 uemail_global = st.session_state.current_user.get("email","") if st.session_state.current_user else ""
 uname_global  = st.session_state.current_user.get("name","User") if st.session_state.current_user else "User"
@@ -850,12 +891,9 @@ with _tcol2:
 with _tcol3:
     if st.button("🚪 Logout", key="logout_btn"):
         tok = st.session_state.get("login_token")
-        if tok:
-            delete_token(tok)
-        try:
-            st.query_params.clear()
-        except:
-            pass
+        if tok: delete_token(tok)
+        try: st.query_params.clear()
+        except: pass
         st.session_state.authenticated = False
         st.session_state.current_user = None
         st.session_state.login_token = None
@@ -866,22 +904,19 @@ with _tcol3:
 # ─────────────────────────────────────────────
 with st.sidebar:
     uhist_sb = get_user_history(uemail_global)
-
-    # Plan status in sidebar
     users_db_sb = load_json(USERS_FILE)
-    plan_expiry_sb = users_db_sb.get(uemail_global, {}).get("plan_expiry", None)
-    plan_expired_sb  = users_db_sb.get(uemail_global, {}).get("plan_expired", False)
-    expiry_html      = f'<div style="font-size:.65rem;color:{TEXT3};margin-top:.4rem">Expires: {plan_expiry_sb}</div>' if plan_expiry_sb and current_plan != "free" else ""
-    expired_html     = f'<div style="font-size:.65rem;color:#f87171;margin-top:.4rem">⚠️ Plan expired — downgraded to Free</div>' if plan_expired_sb else ""
-    name_color       = "#9ca3af" if T == "dark" else "#888888"
+    plan_expiry_sb  = users_db_sb.get(uemail_global, {}).get("plan_expiry", None)
+    plan_expired_sb = users_db_sb.get(uemail_global, {}).get("plan_expired", False)
+    expiry_html  = f'<div style="font-size:.65rem;color:{TEXT3};margin-top:.4rem">Expires: {plan_expiry_sb}</div>' if plan_expiry_sb and current_plan != "free" else ""
+    expired_html = f'<div style="font-size:.65rem;color:#f87171;margin-top:.4rem">⚠️ Plan expired — downgraded to Free</div>' if plan_expired_sb else ""
+    name_color   = "#9ca3af" if T == "dark" else "#888888"
 
     st.markdown(f"""
     <div class="sidebar-section" style="text-align:center">
       <div style="font-size:1.5rem;margin-bottom:.3rem">{plan_icon}</div>
       <div style="font-size:.75rem;font-weight:700;color:{name_color};margin-bottom:.3rem">{uname_global}</div>
       <span class="plan-badge {current_plan}">{plan_icon} {current_plan.upper()} Plan</span>
-      {expiry_html}
-      {expired_html}
+      {expiry_html}{expired_html}
     </div>
     """, unsafe_allow_html=True)
 
@@ -947,12 +982,9 @@ with st.sidebar:
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
     if st.button("🚪 Sign Out", key="sidebar_logout"):
         tok = st.session_state.get("login_token")
-        if tok:
-            delete_token(tok)
-        try:
-            st.query_params.clear()
-        except:
-            pass
+        if tok: delete_token(tok)
+        try: st.query_params.clear()
+        except: pass
         st.session_state.authenticated = False
         st.session_state.current_user = None
         st.session_state.login_token = None
@@ -968,11 +1000,6 @@ def detect_problem_type(s):
     if u <= 10 and pd.api.types.is_integer_dtype(s): return "classification"
     if u / n < 0.05 and u <= 20: return "classification"
     return "regression"
-
-def safe_compare(ptype, n_select=1):
-    fn = clf_compare if ptype == "classification" else reg_compare
-    res = fn(n_select=n_select, verbose=False)
-    return res[0] if isinstance(res, list) else res
 
 def fmt_time(s):
     return f"{int(s//60)}m {int(s%60)}s" if s >= 60 else f"{s:.1f}s"
@@ -998,7 +1025,7 @@ def plan_gate(feature_key: str, upgrade_msg: str = None):
     return False
 
 # ─────────────────────────────────────────────
-#  ADMIN PANEL — always accessible, no dataset needed
+#  ADMIN PANEL
 # ─────────────────────────────────────────────
 if is_admin:
     with st.expander("🔐 Admin Panel", expanded=False):
@@ -1011,29 +1038,24 @@ if is_admin:
         rejected_pays = [p for p in all_payments.values() if p.get("status")=="rejected"]
         total_revenue = sum(p.get("amount",0) for p in approved_pays)
 
-        # Header
         st.markdown(f'<div style="background:linear-gradient(135deg,rgba(192,132,252,0.10),rgba(96,165,250,0.08));border:1px solid rgba(192,132,252,0.35);border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1rem;display:flex;align-items:center;gap:1rem"><span style="font-size:2rem">🔐</span><div><div style="font-size:1.1rem;font-weight:900;color:#c084fc">Admin Control Panel</div><div style="font-size:.8rem;color:{TEXT2}">{uname_global} ({uemail_global}) · Admin Access</div></div></div>', unsafe_allow_html=True)
 
-        # Stats
         sa1,sa2,sa3,sa4,sa5 = st.columns(5)
         for col,lbl,val,sub in [
-            (sa1,"Total Users",    len(all_users_db),          "registered"),
-            (sa2,"⏳ Pending",     len(pending_pays),          "need approval"),
-            (sa3,"✅ Approved",    len(approved_pays),         "payments"),
-            (sa4,"❌ Rejected",    len(rejected_pays),         "payments"),
-            (sa5,"Revenue (PKR)", f"{total_revenue:,.0f}",    "collected"),
+            (sa1,"Total Users",len(all_users_db),"registered"),
+            (sa2,"⏳ Pending",len(pending_pays),"need approval"),
+            (sa3,"✅ Approved",len(approved_pays),"payments"),
+            (sa4,"❌ Rejected",len(rejected_pays),"payments"),
+            (sa5,"Revenue (PKR)",f"{total_revenue:,.0f}","collected"),
         ]:
-            with col:
-                st.metric(lbl, val, sub)
+            with col: st.metric(lbl, val, sub)
 
         adm1, adm2, adm3, adm4 = st.tabs([
             f"⏳ Pending ({len(pending_pays)})",
             f"✅ Approved ({len(approved_pays)})",
-            "👥 All Users",
-            "📧 Email Log"
+            "👥 All Users", "📧 Email Log"
         ])
 
-        # ── PENDING ──
         with adm1:
             if not pending_pays:
                 st.success("✨ No pending payments — all caught up!")
@@ -1042,8 +1064,7 @@ if is_admin:
                 pid    = pay.get("id","")
                 h  = f'<div style="background:{CARD_BG};border:2px solid rgba(251,191,36,0.35);border-radius:16px;padding:1.25rem;margin-bottom:.75rem;position:relative;overflow:hidden">'
                 h += f'<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#fbbf24,{plan_c})"></div>'
-                h += f'<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.2rem">'
-                h += f'<div style="flex:1;min-width:200px">'
+                h += f'<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.2rem"><div style="flex:1;min-width:200px">'
                 h += f'<div style="font-size:.95rem;font-weight:800;color:{TEXT1}">{pay.get("name","?")}</div>'
                 h += f'<div style="font-size:.72rem;color:{TEXT3};margin-bottom:.5rem">{pay.get("email","?")}</div>'
                 h += f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem">'
@@ -1051,14 +1072,12 @@ if is_admin:
                 h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Amount</div><div style="font-weight:800;color:#fbbf24">PKR {pay.get("amount",0):,.0f}</div></div>'
                 h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Method</div><div style="font-weight:600;color:{TEXT1}">{pay.get("payment_method","?").replace("_"," ").title()}</div></div>'
                 h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Billing</div><div style="font-weight:600;color:{TEXT1}">{pay.get("billing","?").title()}</div></div>'
-                h += f'</div></div>'
-                h += f'<div style="flex:1;min-width:180px">'
+                h += f'</div></div><div style="flex:1;min-width:180px">'
                 h += f'<div style="background:{BG3};border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3};margin-bottom:.2rem">Transaction ID</div><div style="font-size:.9rem;font-weight:700;color:#4ade80;font-family:monospace;word-break:break-all">{pay.get("txn_id","?")}</div></div>'
                 h += f'<div style="font-size:.7rem;color:{TEXT3}">📅 {pay.get("submitted_at","")[:16]}</div>'
                 h += f'<div style="font-size:.65rem;color:{TEXT3};font-family:monospace">{pid}</div>'
                 h += f'</div></div></div>'
                 st.markdown(h, unsafe_allow_html=True)
-
                 bc1, bc2, bc3 = st.columns([1,1,2])
                 with bc1:
                     if st.button("✅ Approve", key=f"adm_approve_{pid}"):
@@ -1073,7 +1092,7 @@ if is_admin:
                             pays_rj[pid]["status"] = "rejected"
                             pays_rj[pid]["processed_at"] = now_str()
                             save_json(PAYMENTS_FILE, pays_rj)
-                            log_activity(pay.get("email",""), "plan_rejected", f"rejected by admin")
+                            log_activity(pay.get("email",""), "plan_rejected", "rejected by admin")
                             st.warning("❌ Payment rejected.")
                             st.rerun()
                 with bc3:
@@ -1085,7 +1104,6 @@ if is_admin:
                             save_json(PAYMENTS_FILE, pays_n)
                 st.markdown("---")
 
-        # ── APPROVED ──
         with adm2:
             if not approved_pays:
                 st.info("No approved payments yet.")
@@ -1099,27 +1117,24 @@ if is_admin:
                     h += f'<span style="font-size:.7rem;font-weight:800;color:{plan_c};background:{plan_c}22;border:1px solid {plan_c}55;border-radius:6px;padding:.2rem .55rem">{pay.get("plan","?").upper()}</span>'
                     h += f'<div style="font-weight:800;color:#fbbf24;font-family:monospace">PKR {pay.get("amount",0):,.0f}</div>'
                     h += f'<div style="font-size:.7rem;color:{TEXT3}">✓ {pay.get("processed_at","")[:10]}</div>'
-                    h += f'<div style="font-size:.65rem;color:{TEXT3};font-family:monospace">{pay.get("id","")}</div>'
-                    h += '</div>'
+                    h += f'<div style="font-size:.65rem;color:{TEXT3};font-family:monospace">{pay.get("id","")}</div></div>'
                     st.markdown(h, unsafe_allow_html=True)
 
-        # ── ALL USERS ──
         with adm3:
             user_search = st.text_input("🔍 Search by name or email", key="adm_user_search")
             for em, ud in sorted(all_users_db.items(), key=lambda x: x[1].get("signup_date",""), reverse=True):
                 if user_search and user_search.lower() not in em.lower() and user_search.lower() not in ud.get("name","").lower():
                     continue
-                u_plan  = get_user_plan(em)
-                u_pc    = PLAN_COLORS.get(u_plan,"#6b7280")
-                u_pi    = PLAN_ICONS.get(u_plan,"🌱")
-                u_hist  = all_history.get(em,{})
+                u_plan = get_user_plan(em)
+                u_pc   = PLAN_COLORS.get(u_plan,"#6b7280")
+                u_pi   = PLAN_ICONS.get(u_plan,"🌱")
+                u_hist = all_history.get(em,{})
                 h  = f'<div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:12px;padding:.9rem 1.1rem;margin-bottom:.4rem;display:flex;align-items:center;gap:.9rem;flex-wrap:wrap">'
                 h += f'<div style="width:34px;height:34px;border-radius:50%;background:{u_pc}20;border:2px solid {u_pc}50;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0">{u_pi}</div>'
                 h += f'<div style="flex:1;min-width:160px"><div style="font-size:.9rem;font-weight:700;color:{TEXT1}">{ud.get("name","?")}</div><div style="font-size:.7rem;color:{TEXT3}">{em}</div></div>'
                 h += f'<span style="font-size:.7rem;font-weight:800;color:{u_pc};background:{u_pc}18;border:1px solid {u_pc}44;border-radius:6px;padding:.2rem .55rem">{u_plan.upper()}</span>'
                 h += f'<div style="text-align:center;min-width:45px"><div style="font-size:1rem;font-weight:900;color:#60a5fa">{u_hist.get("login_count",0)}</div><div style="font-size:.6rem;color:{TEXT3}">logins</div></div>'
-                h += f'<div style="font-size:.7rem;color:{TEXT3}">Joined: {ud.get("signup_date","")[:10]}</div>'
-                h += '</div>'
+                h += f'<div style="font-size:.7rem;color:{TEXT3}">Joined: {ud.get("signup_date","")[:10]}</div></div>'
                 st.markdown(h, unsafe_allow_html=True)
                 with st.expander(f"⚙️ Manage {ud.get('name','?')}"):
                     mc1,mc2,mc3 = st.columns(3)
@@ -1134,7 +1149,6 @@ if is_admin:
                             log_activity(em, "plan_changed_by_admin", f"Set to {np_} for {nm_}mo")
                             st.success(f"✅ Done!"); st.rerun()
 
-        # ── EMAIL LOG ──
         with adm4:
             email_log = load_json("dataforge_email_log.json")
             if not email_log:
@@ -1179,16 +1193,10 @@ if st.session_state.data is not None:
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = df.select_dtypes(include=["object","category"]).columns.tolist()
 
-    if is_admin:
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "📊  Data Explorer", "🧬  EDA & Insights", "⚙️  Train Model",
-            "🏆  Results", "📜  My History", "💳  Upgrade"
-        ])
-    else:
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "📊  Data Explorer", "🧬  EDA & Insights", "⚙️  Train Model",
-            "🏆  Results", "📜  My History", "💳  Upgrade"
-        ])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📊  Data Explorer", "🧬  EDA & Insights", "⚙️  Train Model",
+        "🏆  Results", "📜  My History", "💳  Upgrade"
+    ])
 
     # ═══════════════════════════
     # TAB 1 — DATA EXPLORER
@@ -1294,7 +1302,7 @@ if st.session_state.data is not None:
                     fig = px.bar(x=vc.index, y=vc.values, color=vc.values, color_continuous_scale=[ACCENT2, ACCENT1], template=CHART_TEMPLATE, title=f"Top values · {col_pick}")
                     fig.update_layout(showlegend=False, coloraxis_showscale=False)
                 fig.update_layout(**chart_layout(height=340))
-                st.plotly_chart(fig, width='content')
+                st.plotly_chart(fig, use_container_width=True)
 
             with cv2:
                 s = df[col_pick]
@@ -1316,20 +1324,32 @@ if st.session_state.data is not None:
                     zmid=0, text=corr.values.round(2), texttemplate="%{text}",
                     textfont=dict(size=9, family="JetBrains Mono")))
                 fig_h.update_layout(**chart_layout(height=460))
-                st.plotly_chart(fig, width='content')
+                st.plotly_chart(fig_h, use_container_width=True)
 
     # ═══════════════════════════
-    # TAB 3 — TRAIN MODEL
+    # TAB 3 — TRAIN MODEL (Memory-Safe)
     # ═══════════════════════════
     with tab3:
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">⚙️</div><h3>Training Configuration</h3></div>""", unsafe_allow_html=True)
+
+        # Memory warning
+        mem_now = get_memory_usage_mb()
+        if mem_now > 350:
+            st.warning(f"⚠️ **High Memory ({mem_now:.0f}MB/512MB)** — Training se pehle page refresh kar lo (Ctrl+R).")
 
         tc1, tc2 = st.columns([3, 1])
         with tc1:
             target_col = st.selectbox("🎯 Select Target Column", df.columns.tolist())
         with tc2:
             st.markdown("<br>", unsafe_allow_html=True)
-            st.info(f"📐 {len(df):,} rows available")
+            row_color = ACCENT1 if len(df) <= MAX_ROWS_WARNING else ACCENTY if len(df) <= MAX_ROWS_TRAINING else ACCENTR
+            st.markdown(
+                f'<div style="padding:.6rem 1rem;background:{BG3};border:1px solid {row_color}44;border-radius:10px;text-align:center">'
+                f'<div style="font-size:.65rem;color:{TEXT3};text-transform:uppercase;font-weight:700">Dataset Size</div>'
+                f'<div style="font-size:1.1rem;font-weight:900;color:{row_color}">{len(df):,}</div>'
+                f'<div style="font-size:.62rem;color:{TEXT3}">rows</div></div>',
+                unsafe_allow_html=True
+            )
 
         if target_col:
             ts = df[target_col]
@@ -1350,14 +1370,27 @@ if st.session_state.data is not None:
               </div>
             </div>""", unsafe_allow_html=True)
 
-            max_folds = plan_limits["cv_folds_max"]
+            # Dataset size advisory
+            if len(df) > MAX_ROWS_TRAINING:
+                st.error(
+                    f"🚨 **Dataset {len(df):,} rows** — Streamlit Cloud ke liye bahut bada hai.  \n"
+                    f"Training automatically **{MAX_ROWS_TRAINING:,} rows** par sample karega (stratified)."
+                )
+            elif len(df) > MAX_ROWS_WARNING:
+                st.warning(
+                    f"⚠️ **{len(df):,} rows** — Thoda bada hai. Training chal jayegi lekin "
+                    f"agar crash ho toh {MAX_ROWS_WARNING:,} rows tak chota karo."
+                )
+
+            max_folds    = plan_limits["cv_folds_max"]
             has_advanced = plan_limits["advanced_models"]
             st.markdown(f"""
             <div style="background:{"rgba(255,255,255,0.03)" if T=="dark" else "rgba(0,0,0,0.03)"};border:1px solid {BORDER};border-radius:12px;padding:1rem 1.25rem;margin:.75rem 0">
               <span class="insight-chip" style="border-color:{plan_color};color:{plan_color}">{plan_icon} {current_plan.upper()} Plan</span>
               <span class="insight-chip">🔁 Max {max_folds}-fold CV</span>
-              <span class="insight-chip">🤖 {"15+ algorithms" if has_advanced else "5 basic algorithms"}</span>
+              <span class="insight-chip">🤖 {"15+ algorithms" if has_advanced else "8 safe algorithms"}</span>
               <span class="insight-chip">📦 {"XGBoost, LGBM included" if has_advanced else "XGBoost locked 🔒"}</span>
+              <span class="insight-chip">💾 Max {MAX_ROWS_TRAINING:,} rows (auto-sample)</span>
             </div>""", unsafe_allow_html=True)
 
             with st.expander("⚙️ Advanced Configuration", expanded=False):
@@ -1365,15 +1398,26 @@ if st.session_state.data is not None:
                 with ac1:
                     train_size = st.slider("Training Split", 0.5, 0.9, 0.8, 0.05)
                 with ac2:
-                    fold = st.slider(f"CV Folds (max {max_folds})", 2, max_folds, min(5, max_folds))
+                    recommended_fold = min(3, max_folds) if len(df) > MAX_ROWS_WARNING else min(5, max_folds)
+                    fold = st.slider(
+                        f"CV Folds (max {max_folds})", 2, max_folds, recommended_fold,
+                        help=f"Bade datasets pe {recommended_fold}-fold recommend (memory safe)"
+                    )
                 with ac3:
                     max_algo_slider = plan_limits["max_algorithms"]
-                    max_models = st.slider(f"Max Models", 3, max_algo_slider, min(10, max_algo_slider))
+                    max_models = st.slider(f"Max Models", 3, max_algo_slider, min(8, max_algo_slider))
                 ac4, ac5 = st.columns(2)
                 with ac4:
                     normalize = st.checkbox("Normalize Features", value=True)
                 with ac5:
                     remove_out = st.checkbox("Remove Outliers", value=False)
+                st.markdown(
+                    f'<div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.30);'
+                    f'border-radius:8px;padding:.6rem .9rem;font-size:.78rem;color:{ACCENTY}">'
+                    f'💡 <b>Memory Tip:</b> Kam folds = kam RAM. Bade datasets pe 2-3 fold use karo.</div>',
+                    unsafe_allow_html=True
+                )
+
             st.session_state.cv_fold = fold
 
             st.markdown("<br>", unsafe_allow_html=True)
@@ -1386,77 +1430,105 @@ if st.session_state.data is not None:
                         st.session_state.results = None
                         st.session_state.best_model = None
                         st.session_state.training_time = None
+                        force_gc()
                         st.rerun()
 
             if train_clicked:
-                steps = [
-                    ("Data Preprocessing",   "Handling nulls, encoding categoricals…"),
-                    ("Feature Engineering",  "Scaling, transformations, pipeline setup…"),
-                    ("Model Comparison",     f"Running algorithms with {fold}-fold cross-validation…"),
-                    ("Best Model Selection", "Picking winner by metric score…"),
-                    ("Saving Artifact",      "Serializing model to best_model.pkl…"),
-                ]
-                placeholder = st.empty()
+                progress_bar = st.progress(0)
+                status_box   = st.empty()
+                warn_box     = st.empty()
+                timeline_box = st.empty()
 
-                def render_steps(done):
+                steps_labels = [
+                    "📦 Data Sampling & Validation",
+                    "⚙️ PyCaret Environment Setup",
+                    "🤖 Model Comparison (memory-safe)",
+                    "🏆 Best Model Selection",
+                    "💾 Saving Artifact",
+                ]
+
+                def render_steps(done_count):
                     html = '<div class="step-timeline">'
-                    for i, (lbl, sub) in enumerate(steps):
-                        cls = "done" if i < done else ("active" if i == done else "")
-                        icon_s = "✓" if i < done else ("◉" if i == done else str(i+1))
-                        html += f"""<div class="step-item {cls}"><div class="step-dot {cls}">{icon_s}</div><div><div class="step-label">{lbl}</div><div class="step-sub">{sub}</div></div></div>"""
+                    for i, lbl in enumerate(steps_labels):
+                        cls    = "done"   if i < done_count else ("active" if i == done_count else "")
+                        icon_s = "✓"      if i < done_count else ("◉"      if i == done_count else str(i+1))
+                        html += (
+                            f'<div class="step-item {cls}">'
+                            f'<div class="step-dot {cls}">{icon_s}</div>'
+                            f'<div><div class="step-label">{lbl}</div></div>'
+                            f'</div>'
+                        )
                     return html + "</div>"
 
-                try:
-                    t0 = time.time()
-                    for si in range(len(steps)):
-                        placeholder.markdown(render_steps(si), unsafe_allow_html=True)
-                        if si == 2:
-                            kw_setup = dict(data=df, target=target_col, train_size=float(train_size),
-                                            fold=int(fold), normalize=normalize, verbose=False, html=False, session_id=123)
-                            if remove_out and ptype == "regression" and len(df) > 100:
-                                kw_setup["remove_outliers"] = True
-                            kw_compare = dict(verbose=False, n_select=1)
-                            if not has_advanced:
-                                kw_compare["exclude"] = ['xgboost', 'lightgbm', 'catboost']
-                            if ptype == "classification":
-                                clf_setup(**kw_setup)
-                                best = clf_compare(**kw_compare)
-                                results = clf_pull()
-                                clf_save(best, "best_model")
-                            else:
-                                reg_setup(**kw_setup)
-                                best = reg_compare(**kw_compare)
-                                results = reg_pull()
-                                reg_save(best, "best_model")
-                            st.session_state.best_model = best
-                            st.session_state.results = results
-                        time.sleep(0.3)
+                timeline_box.markdown(render_steps(0), unsafe_allow_html=True)
+                progress_bar.progress(5)
+                status_box.info("🚀 Training shuru ho rahi hai...")
 
-                    placeholder.markdown(render_steps(len(steps)), unsafe_allow_html=True)
-                    elapsed = time.time() - t0
+                try:
+                    best, results, elapsed, warn_msgs, trained_rows = run_memory_safe_training(
+                        df           = df,
+                        target_col   = target_col,
+                        problem_type = ptype,
+                        train_size   = train_size,
+                        fold         = fold,
+                        normalize    = normalize,
+                        remove_out   = remove_out,
+                        has_advanced = has_advanced,
+                    )
+
+                    progress_bar.progress(100)
+                    timeline_box.markdown(render_steps(len(steps_labels)), unsafe_allow_html=True)
+
+                    st.session_state.best_model    = best
+                    st.session_state.results       = results
                     st.session_state.training_time = elapsed
+
+                    for w in warn_msgs:
+                        warn_box.warning(w)
 
                     if uemail_global:
                         try:
-                            res_log = st.session_state.results
-                            mc_log = res_log.columns[0]
-                            nr_log = res_log.select_dtypes(include=[np.number]).columns
-                            bm_name = str(res_log.iloc[0][mc_log])
-                            bm_score = float(res_log.iloc[0][nr_log[0]]) if len(nr_log) else 0.0
-                            log_training(email=uemail_global, dataset=str(st.session_state.dataset_name or "Uploaded CSV"),
-                                         problem_type=str(ptype), best_model=bm_name, score=bm_score, rows=len(df), cols=len(df.columns))
-                            log_activity(uemail_global, "training_complete", f"{bm_name} | {bm_score:.4f}")
-                        except:
+                            mc_log   = results.columns[0]
+                            nr_log   = results.select_dtypes(include=[np.number]).columns
+                            bm_name  = str(results.iloc[0][mc_log])
+                            bm_score = float(results.iloc[0][nr_log[0]]) if len(nr_log) else 0.0
+                            log_training(
+                                email=uemail_global,
+                                dataset=str(st.session_state.dataset_name or "Uploaded CSV"),
+                                problem_type=str(ptype), best_model=bm_name,
+                                score=bm_score, rows=trained_rows, cols=len(df.columns)
+                            )
+                            log_activity(uemail_global, "training_complete",
+                                         f"{bm_name} | {bm_score:.4f} | {trained_rows} rows")
+                        except Exception:
                             pass
 
-                    st.success(f"✅ Training complete in **{fmt_time(elapsed)}**! Head to the 🏆 Results tab.")
+                    status_box.success(
+                        f"✅ Training complete in **{fmt_time(elapsed)}** "
+                        f"({trained_rows:,} rows) — 🏆 Results tab check karo!"
+                    )
                     if not has_advanced:
                         st.info("💡 Upgrade to Pro for XGBoost, LightGBM, and CatBoost!")
                     st.balloons()
 
+                except MemoryError as me:
+                    progress_bar.progress(0)
+                    timeline_box.empty()
+                    status_box.error(
+                        f"💥 **Memory Overflow!**  \n{str(me)}  \n\n"
+                        f"**Quick fixes:**  \n"
+                        f"- Dataset ko {MAX_ROWS_TRAINING:,} rows se kam karo  \n"
+                        f"- Page refresh karo (Ctrl+R) aur dobara try karo  \n"
+                        f"- CV Folds ko 2 par set karo"
+                    )
                 except Exception as e:
-                    placeholder.empty()
-                    st.error(f"❌ Training failed: {str(e)}")
+                    progress_bar.progress(0)
+                    timeline_box.empty()
+                    err_str = str(e)
+                    if any(kw in err_str.lower() for kw in ["memory","killed","oom","cannot allocate"]):
+                        status_box.error("💥 **Memory Crash!** Dataset chota karo aur page refresh karo.")
+                    else:
+                        status_box.error(f"❌ Training failed: {err_str}")
 
     # ═══════════════════════════
     # TAB 4 — RESULTS
@@ -1471,12 +1543,12 @@ if st.session_state.data is not None:
             </div>""", unsafe_allow_html=True)
         else:
             res_df = st.session_state.results
-            model_col = "Model" if "Model" in res_df.columns else res_df.columns[0]
-            num_res = res_df.select_dtypes(include=[np.number]).columns.tolist()
-            best_name = res_df.iloc[0][model_col]
+            model_col   = "Model" if "Model" in res_df.columns else res_df.columns[0]
+            num_res     = res_df.select_dtypes(include=[np.number]).columns.tolist()
+            best_name   = res_df.iloc[0][model_col]
             metric_name = num_res[0] if num_res else "Score"
-            top_score = res_df.iloc[0][metric_name] if num_res else 0
-            folds_used = st.session_state.cv_fold or 5
+            top_score   = res_df.iloc[0][metric_name] if num_res else 0
+            folds_used  = st.session_state.cv_fold or 5
 
             st.markdown(f"""
             <div class="trophy-banner slide-up">
@@ -1517,33 +1589,33 @@ if st.session_state.data is not None:
             st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
             ch1, ch2 = st.columns(2)
             with ch1:
-                top6 = res_df.head(6)
+                top6   = res_df.head(6)
                 colors = [ACCENT1 if i == 0 else BG3 for i in range(len(top6))]
-                fig_b = go.Figure(go.Bar(x=top6[metric_name], y=top6[model_col], orientation="h",
+                fig_b  = go.Figure(go.Bar(x=top6[metric_name], y=top6[model_col], orientation="h",
                     marker_color=colors, text=top6[metric_name].round(4), textposition="inside",
                     textfont=dict(size=10, color="white")))
                 fig_b.update_layout(**chart_layout(height=360, title=f"Top Models · {metric_name}", yaxis=dict(autorange="reversed")))
-                st.plotly_chart(fig, width='content')
+                st.plotly_chart(fig_b, use_container_width=True)
             with ch2:
                 rc = num_res[:6]
                 bv = res_df.iloc[0][rc]
                 mi, ma = bv.min(), bv.max()
                 nv = (bv - mi) / (ma - mi + 1e-9)
                 fig_r = go.Figure(go.Scatterpolar(
-                    r=list(nv.values) + [nv.values[0]], theta=list(nv.index) + [nv.index[0]],
-                    fill="toself", fillcolor=f"rgba(74,222,128,0.18)",
+                    r=list(nv.values)+[nv.values[0]], theta=list(nv.index)+[nv.index[0]],
+                    fill="toself", fillcolor="rgba(74,222,128,0.18)",
                     line=dict(color=ACCENT1, width=2.5), marker=dict(size=6, color=ACCENT1)))
                 fig_r.update_layout(**chart_layout(height=360, showlegend=False, title="Best Model · Metrics Radar",
                     polar=dict(bgcolor=CHART_PAPER, radialaxis=dict(visible=True, range=[0,1], gridcolor=BORDER),
                                angularaxis=dict(gridcolor=BORDER))))
-                st.plotly_chart(fig, width='content')
+                st.plotly_chart(fig_r, use_container_width=True)
 
     # ═══════════════════════════
     # TAB 5 — MY HISTORY
     # ═══════════════════════════
     with tab5:
         uhist_h = get_user_history(uemail_global)
-        history_limit = plan_limits["history_entries"]
+        history_limit     = plan_limits["history_entries"]
         full_training_log = uhist_h.get("training_log", [])
 
         if not plan_limits["full_history"] and len(full_training_log) > history_limit:
@@ -1567,19 +1639,19 @@ if st.session_state.data is not None:
             </div>""", unsafe_allow_html=True)
         else:
             for t in training_log[-10:][::-1]:
-                ptype = t.get("problem_type","—")
-                ptype_color = ACCENT1 if ptype == "classification" else ACCENT2
+                pt = t.get("problem_type","—")
+                pt_color = ACCENT1 if pt == "classification" else ACCENT2
                 st.markdown(f"""
                 <div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:16px;padding:1.25rem;margin-bottom:.75rem;display:flex;align-items:center;gap:1rem;position:relative;overflow:hidden">
-                  <div style="position:absolute;top:0;left:0;bottom:0;width:3px;background:{ptype_color}"></div>
-                  <div style="font-size:1.5rem;margin-left:.5rem">{"🎯" if ptype=="classification" else "📈"}</div>
+                  <div style="position:absolute;top:0;left:0;bottom:0;width:3px;background:{pt_color}"></div>
+                  <div style="font-size:1.5rem;margin-left:.5rem">{"🎯" if pt=="classification" else "📈"}</div>
                   <div style="flex:1">
                     <div style="font-size:.9rem;font-weight:700;color:{TEXT1}">{t.get("dataset","?")}</div>
                     <div style="font-size:.75rem;color:{TEXT3};margin-top:.15rem">{t.get("best_model","?")} · {t.get("rows",0):,} rows · {t.get("time","")[:16]}</div>
                   </div>
                   <div style="text-align:right">
                     <div style="font-size:.65rem;font-weight:800;text-transform:uppercase;color:{TEXT3}">Score</div>
-                    <div style="font-size:1.3rem;font-weight:900;color:{ptype_color};font-family:'JetBrains Mono',monospace">{t.get("score",0):.4f}</div>
+                    <div style="font-size:1.3rem;font-weight:900;color:{pt_color};font-family:'JetBrains Mono',monospace">{t.get("score",0):.4f}</div>
                   </div>
                 </div>""", unsafe_allow_html=True)
 
@@ -1593,8 +1665,7 @@ if st.session_state.data is not None:
     # TAB 6 — UPGRADE / PRICING
     # ═══════════════════════════
     with tab6:
-        # ── Current plan status banner ──
-        users_db_tab = load_json(USERS_FILE)
+        users_db_tab    = load_json(USERS_FILE)
         plan_expiry_tab = users_db_tab.get(uemail_global, {}).get("plan_expiry", None)
 
         if current_plan != "free":
@@ -1602,130 +1673,98 @@ if st.session_state.data is not None:
             plan_banner_bg   = "rgba(74,222,128,0.08)" if current_plan == "pro" else "rgba(192,132,252,0.08)"
             plan_banner_bdr  = "rgba(74,222,128,0.35)" if current_plan == "pro" else "rgba(192,132,252,0.35)"
             st.markdown(f"""
-            <div style="background:{plan_banner_bg};
-                        border:1px solid {plan_banner_bdr};
-                        border-radius:16px;padding:1.5rem;margin-bottom:1.5rem;display:flex;align-items:center;gap:1rem">
+            <div style="background:{plan_banner_bg};border:1px solid {plan_banner_bdr};border-radius:16px;padding:1.5rem;margin-bottom:1.5rem;display:flex;align-items:center;gap:1rem">
               <div style="font-size:2.5rem">{plan_icon}</div>
               <div>
                 <div style="font-size:1.1rem;font-weight:800;color:{plan_color}">You're on {current_plan.upper()} Plan ✓</div>
-                <div style="font-size:.85rem;color:{TEXT2};margin-top:.2rem">
-                  {active_until_txt}
-                </div>
+                <div style="font-size:.85rem;color:{TEXT2};margin-top:.2rem">{active_until_txt}</div>
               </div>
             </div>""", unsafe_allow_html=True)
         else:
             st.markdown(f"""
             <div style="text-align:center;padding:1.5rem;background:{BG3};border:1px solid {BORDER};border-radius:16px;margin-bottom:1.5rem">
-              <div style="font-size:1.5rem;font-weight:900;background:{HERO_H1_GRAD};-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">
-                Unlock the Full Power of DataForge
-              </div>
-              <div style="font-size:.9rem;color:{TEXT2};margin-top:.4rem">
-                You're on the Free plan. Upgrade to access XGBoost, LightGBM, model export, and more.
-              </div>
+              <div style="font-size:1.5rem;font-weight:900;background:{HERO_H1_GRAD};-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">Unlock the Full Power of DataForge</div>
+              <div style="font-size:.9rem;color:{TEXT2};margin-top:.4rem">You're on the Free plan. Upgrade to access XGBoost, LightGBM, model export, and more.</div>
             </div>""", unsafe_allow_html=True)
 
-        # ── BILLING TOGGLE ──
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">💎</div><h3>Choose Your Plan</h3></div>""", unsafe_allow_html=True)
         bill_col1, bill_col2, bill_col3 = st.columns([2, 1, 2])
         with bill_col2:
             billing = st.radio("Billing", ["Monthly", "Annual"], horizontal=True, label_visibility="collapsed", key="billing_cycle")
-
         is_annual = billing == "Annual"
 
-        # ── PRICING CARDS ──
         pc1, pc2, pc3 = st.columns(3)
-
-        # FREE
         with pc1:
             st.markdown(f"""
             <div class="pricing-card {'popular' if current_plan=='free' else ''}">
-              <div class="plan-icon">🌱</div>
-              <div class="plan-name">Free</div>
+              <div class="plan-icon">🌱</div><div class="plan-name">Free</div>
               <div class="price-main" style="color:{TEXT1}">$0</div>
               <div class="price-period">forever free</div>
               <ul class="feature-list">
-                <li class="included">3 datasets/month</li>
-                <li class="included">5 basic algorithms</li>
-                <li class="included">3-fold cross validation</li>
-                <li class="included">Basic history (3 entries)</li>
-                <li class="not-included">XGBoost / LightGBM</li>
-                <li class="not-included">Model export (.pkl)</li>
-                <li class="not-included">Priority processing</li>
-                <li class="not-included">API access</li>
+                <li class="included">3 datasets/month</li><li class="included">5 basic algorithms</li>
+                <li class="included">3-fold cross validation</li><li class="included">Basic history (3 entries)</li>
+                <li class="not-included">XGBoost / LightGBM</li><li class="not-included">Model export (.pkl)</li>
+                <li class="not-included">Priority processing</li><li class="not-included">API access</li>
               </ul>
             </div>""", unsafe_allow_html=True)
             if current_plan == "free":
                 st.markdown(f'<div style="text-align:center;padding:.75rem;background:rgba(107,114,128,0.10);border-radius:12px;font-weight:700;color:#9ca3af;font-size:.875rem;margin-top:.5rem">✓ Current Plan</div>', unsafe_allow_html=True)
 
-        # PRO
         with pc2:
-            pro_price    = PRICING["pro"]["annual_price"] if is_annual else PRICING["pro"]["monthly_price"]
-            pro_total    = f"Billed ${PRICING['pro']['annual_total']}/year" if is_annual else "Billed monthly"
-            savings      = f"Save ${PRICING['pro']['monthly_price']*12 - PRICING['pro']['annual_total']}/yr" if is_annual else ""
-            savings_html = f'<span style="color:#4ade80;font-weight:700">· {savings}</span>' if savings else ""
+            pro_price = PRICING["pro"]["annual_price"] if is_annual else PRICING["pro"]["monthly_price"]
+            pro_total = f"Billed ${PRICING['pro']['annual_total']}/year" if is_annual else "Billed monthly"
+            savings   = f"Save ${PRICING['pro']['monthly_price']*12 - PRICING['pro']['annual_total']}/yr" if is_annual else ""
+            sav_html  = f'<span style="color:#4ade80;font-weight:700">· {savings}</span>' if savings else ""
             st.markdown(f"""
             <div class="pricing-card popular">
               <div class="popular-badge">⭐ Most Popular</div>
-              <div class="plan-icon">⚡</div>
-              <div class="plan-name">Pro</div>
+              <div class="plan-icon">⚡</div><div class="plan-name">Pro</div>
               <div class="price-main" style="color:#4ade80">${pro_price}</div>
-              <div class="price-period">/month · {pro_total} {savings_html}</div>
+              <div class="price-period">/month · {pro_total} {sav_html}</div>
               <ul class="feature-list">
-                <li class="included">Unlimited datasets</li>
-                <li class="included">15+ algorithms</li>
-                <li class="included">10-fold cross validation</li>
-                <li class="included">XGBoost, LightGBM, CatBoost</li>
-                <li class="included">Export trained model (.pkl)</li>
-                <li class="included">50-entry history</li>
-                <li class="included">Priority processing queue</li>
-                <li class="not-included">API access</li>
+                <li class="included">Unlimited datasets</li><li class="included">15+ algorithms</li>
+                <li class="included">10-fold cross validation</li><li class="included">XGBoost, LightGBM, CatBoost</li>
+                <li class="included">Export trained model (.pkl)</li><li class="included">50-entry history</li>
+                <li class="included">Priority processing queue</li><li class="not-included">API access</li>
               </ul>
             </div>""", unsafe_allow_html=True)
             if current_plan == "pro":
                 st.markdown(f'<div style="text-align:center;padding:.75rem;background:rgba(74,222,128,0.10);border-radius:12px;font-weight:700;color:#4ade80;font-size:.875rem;margin-top:.5rem">✓ Current Plan</div>', unsafe_allow_html=True)
             else:
                 if st.button("⚡ Upgrade to Pro", key="btn_upgrade_pro"):
-                    st.session_state.upgrade_plan_selected = "pro"
-                    st.rerun()
+                    st.session_state.upgrade_plan_selected = "pro"; st.rerun()
 
-        # ENTERPRISE
         with pc3:
-            ent_price      = PRICING["enterprise"]["annual_price"] if is_annual else PRICING["enterprise"]["monthly_price"]
-            ent_total      = f"Billed ${PRICING['enterprise']['annual_total']}/year" if is_annual else "Billed monthly"
-            savings_e      = f"Save ${PRICING['enterprise']['monthly_price']*12 - PRICING['enterprise']['annual_total']}/yr" if is_annual else ""
-            savings_e_html = f'<span style="color:#c084fc;font-weight:700">· {savings_e}</span>' if savings_e else ""
+            ent_price = PRICING["enterprise"]["annual_price"] if is_annual else PRICING["enterprise"]["monthly_price"]
+            ent_total = f"Billed ${PRICING['enterprise']['annual_total']}/year" if is_annual else "Billed monthly"
+            sav_e     = f"Save ${PRICING['enterprise']['monthly_price']*12 - PRICING['enterprise']['annual_total']}/yr" if is_annual else ""
+            sav_e_html= f'<span style="color:#c084fc;font-weight:700">· {sav_e}</span>' if sav_e else ""
             st.markdown(f"""
             <div class="pricing-card">
-              <div class="plan-icon">🏢</div>
-              <div class="plan-name">Enterprise</div>
+              <div class="plan-icon">🏢</div><div class="plan-name">Enterprise</div>
               <div class="price-main" style="color:#c084fc">${ent_price}</div>
-              <div class="price-period">/month · {ent_total} {savings_e_html}</div>
+              <div class="price-period">/month · {ent_total} {sav_e_html}</div>
               <ul class="feature-list">
-                <li class="included">Everything in Pro</li>
-                <li class="included">Unlimited history</li>
-                <li class="included">REST API access</li>
-                <li class="included">Unlimited team members</li>
-                <li class="included">Custom model pipelines</li>
-                <li class="included">Dedicated support</li>
-                <li class="included">SLA guarantee</li>
-                <li class="included">On-premise deployment</li>
+                <li class="included">Everything in Pro</li><li class="included">Unlimited history</li>
+                <li class="included">REST API access</li><li class="included">Unlimited team members</li>
+                <li class="included">Custom model pipelines</li><li class="included">Dedicated support</li>
+                <li class="included">SLA guarantee</li><li class="included">On-premise deployment</li>
               </ul>
             </div>""", unsafe_allow_html=True)
             if current_plan == "enterprise":
                 st.markdown(f'<div style="text-align:center;padding:.75rem;background:rgba(192,132,252,0.10);border-radius:12px;font-weight:700;color:#c084fc;font-size:.875rem;margin-top:.5rem">✓ Current Plan</div>', unsafe_allow_html=True)
             else:
                 if st.button("🏢 Upgrade to Enterprise", key="btn_upgrade_ent"):
-                    st.session_state.upgrade_plan_selected = "enterprise"
-                    st.rerun()
+                    st.session_state.upgrade_plan_selected = "enterprise"; st.rerun()
 
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
         # ── PAYMENT FLOW ──
         if st.session_state.upgrade_plan_selected:
             selected_plan = st.session_state.upgrade_plan_selected
-            is_ann = is_annual
-            amount_usd = PRICING[selected_plan]["annual_price"] if is_ann else PRICING[selected_plan]["monthly_price"]
-            amount_pkr = amount_usd * 280  # rough USD to PKR rate
+            is_ann        = is_annual
+            amount_usd    = PRICING[selected_plan]["annual_price"] if is_ann else PRICING[selected_plan]["monthly_price"]
+            amount_pkr    = amount_usd * 280
 
             st.markdown(f"""
             <div style="background:{"rgba(74,222,128,0.05)" if T=="dark" else "rgba(124,58,237,0.05)"};
@@ -1735,7 +1774,7 @@ if st.session_state.data is not None:
                 <div style="font-size:2.5rem">{PRICING[selected_plan]['icon']}</div>
                 <div>
                   <div style="font-size:1.3rem;font-weight:900;color:{TEXT1}">Complete Your {selected_plan.title()} Upgrade</div>
-                  <div style="font-size:.875rem;color:{TEXT2}">{'Annual' if is_ann else 'Monthly'} billing · 
+                  <div style="font-size:.875rem;color:{TEXT2}">{'Annual' if is_ann else 'Monthly'} billing ·
                     <b style="color:{PRICING[selected_plan]['color']}">${amount_usd}/mo</b> ·
                     <b style="color:{ACCENTY}">≈ PKR {amount_pkr:,.0f}{'/year' if is_ann else '/month'}</b>
                   </div>
@@ -1743,20 +1782,15 @@ if st.session_state.data is not None:
                 <div style="margin-left:auto">
             """, unsafe_allow_html=True)
             if st.button("✕ Cancel", key="cancel_upgrade"):
-                st.session_state.upgrade_plan_selected = None
-                st.rerun()
+                st.session_state.upgrade_plan_selected = None; st.rerun()
             st.markdown("</div></div>", unsafe_allow_html=True)
 
-            # ── Step 1: Choose Payment Method ──
-            st.markdown(f"""
-            <div style="font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:{TEXT3};margin-bottom:.75rem">
-              Step 1 — Choose Payment Method
-            </div>""", unsafe_allow_html=True)
+            st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:{TEXT3};margin-bottom:.75rem">Step 1 — Choose Payment Method</div>', unsafe_allow_html=True)
 
             pm_col1, pm_col2, pm_col3, pm_col4 = st.columns(4)
             pm_options = list(PAYMENT_METHODS.keys())
-            pm_icons = {"easypaisa": "📱", "jazzcash": "💸", "bank_transfer": "🏦", "card": "💳"}
-            pm_names = {"easypaisa": "EasyPaisa", "jazzcash": "JazzCash", "bank_transfer": "Bank Transfer", "card": "Debit/Credit Card"}
+            pm_icons   = {"easypaisa":"📱","jazzcash":"💸","bank_transfer":"🏦","card":"💳"}
+            pm_names   = {"easypaisa":"EasyPaisa","jazzcash":"JazzCash","bank_transfer":"Bank Transfer","card":"Debit/Credit Card"}
 
             if "selected_pm" not in st.session_state:
                 st.session_state.selected_pm = "easypaisa"
@@ -1770,134 +1804,73 @@ if st.session_state.data is not None:
                       <div class="pm-name">{pm_names[pm_key]}</div>
                     </div>""", unsafe_allow_html=True)
                     if st.button(f"{'✓ ' if is_sel else ''}Select", key=f"pm_{pm_key}"):
-                        st.session_state.selected_pm = pm_key
-                        st.rerun()
+                        st.session_state.selected_pm = pm_key; st.rerun()
 
             st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
-
-            # ── Step 2: Payment Instructions ──
             pm = PAYMENT_METHODS[st.session_state.selected_pm]
 
             if st.session_state.selected_pm == "card":
                 st.info("💳 Card payments coming soon! Please use EasyPaisa, JazzCash, or Bank Transfer for now.")
             else:
-                st.markdown(f"""
-                <div style="font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:{TEXT3};margin-bottom:.75rem">
-                  Step 2 — Send Payment
-                </div>""", unsafe_allow_html=True)
+                st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:{TEXT3};margin-bottom:.75rem">Step 2 — Send Payment</div>', unsafe_allow_html=True)
 
                 inst_col1, inst_col2 = st.columns([3, 2])
                 with inst_col1:
-                    # Account details
                     if st.session_state.selected_pm in ["easypaisa", "jazzcash"]:
                         st.markdown(f"""
-                        <div class="account-box">
-                          <div class="ab-label">Account Number</div>
-                          <div class="ab-value">{pm['number']}</div>
-                        </div>
-                        <div class="account-box">
-                          <div class="ab-label">Account Name</div>
-                          <div class="ab-value">{pm['account_name']}</div>
-                        </div>""", unsafe_allow_html=True)
+                        <div class="account-box"><div class="ab-label">Account Number</div><div class="ab-value">{pm['number']}</div></div>
+                        <div class="account-box"><div class="ab-label">Account Name</div><div class="ab-value">{pm['account_name']}</div></div>""", unsafe_allow_html=True)
                     else:
                         st.markdown(f"""
-                        <div class="account-box">
-                          <div class="ab-label">Bank</div>
-                          <div class="ab-value">{pm['bank']}</div>
-                        </div>
-                        <div class="account-box">
-                          <div class="ab-label">Account Title</div>
-                          <div class="ab-value">{pm['account_title']}</div>
-                        </div>
-                        <div class="account-box">
-                          <div class="ab-label">Account Number</div>
-                          <div class="ab-value">{pm['account_number']}</div>
-                        </div>
-                        <div class="account-box">
-                          <div class="ab-label">IBAN</div>
-                          <div class="ab-value" style="font-size:.85rem">{pm['iban']}</div>
-                        </div>""", unsafe_allow_html=True)
-
-                    # Amount to send
+                        <div class="account-box"><div class="ab-label">Bank</div><div class="ab-value">{pm['bank']}</div></div>
+                        <div class="account-box"><div class="ab-label">Account Title</div><div class="ab-value">{pm['account_title']}</div></div>
+                        <div class="account-box"><div class="ab-label">Account Number</div><div class="ab-value">{pm['account_number']}</div></div>
+                        <div class="account-box"><div class="ab-label">IBAN</div><div class="ab-value" style="font-size:.85rem">{pm['iban']}</div></div>""", unsafe_allow_html=True)
                     st.markdown(f"""
-                    <div style="background:{"rgba(251,191,36,0.08)" if T=="dark" else "rgba(251,191,36,0.10)"};
-                                border:1px solid rgba(251,191,36,0.35);border-radius:12px;padding:1rem;margin-top:.75rem">
+                    <div style="background:{"rgba(251,191,36,0.08)" if T=="dark" else "rgba(251,191,36,0.10)"};border:1px solid rgba(251,191,36,0.35);border-radius:12px;padding:1rem;margin-top:.75rem">
                       <div style="font-size:.65rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:{ACCENTY}">Amount to Send</div>
-                      <div style="font-size:1.8rem;font-weight:900;color:{ACCENTY};font-family:'JetBrains Mono',monospace">
-                        PKR {amount_pkr:,.0f}
-                      </div>
-                      <div style="font-size:.75rem;color:{TEXT3};margin-top:.2rem">
-                        (${amount_usd}/mo · {'Annual' if is_ann else 'Monthly'} billing)
-                      </div>
+                      <div style="font-size:1.8rem;font-weight:900;color:{ACCENTY};font-family:'JetBrains Mono',monospace">PKR {amount_pkr:,.0f}</div>
+                      <div style="font-size:.75rem;color:{TEXT3};margin-top:.2rem">(${amount_usd}/mo · {'Annual' if is_ann else 'Monthly'} billing)</div>
                     </div>""", unsafe_allow_html=True)
 
                 with inst_col2:
-                    st.markdown(f"""
-                    <div class="instructions-box">
-                      <div class="inst-title">📋 How to Pay</div>
-                      <ol>""", unsafe_allow_html=True)
+                    st.markdown(f'<div class="instructions-box"><div class="inst-title">📋 How to Pay</div><ol>', unsafe_allow_html=True)
                     for step in pm["instructions"]:
                         st.markdown(f'<li style="padding:.4rem 0;font-size:.82rem;color:{TEXT2};line-height:1.5">{step}</li>', unsafe_allow_html=True)
                     st.markdown("</ol></div>", unsafe_allow_html=True)
 
                 st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
-
-                # ── Step 3: Submit Transaction ID ──
-                st.markdown(f"""
-                <div style="font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:{TEXT3};margin-bottom:.75rem">
-                  Step 3 — Submit Transaction ID
-                </div>""", unsafe_allow_html=True)
+                st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:{TEXT3};margin-bottom:.75rem">Step 3 — Submit Transaction ID</div>', unsafe_allow_html=True)
 
                 sub_col1, sub_col2 = st.columns([3, 2])
                 with sub_col1:
-                    txn_input = st.text_input(
-                        "Transaction / Reference ID",
+                    txn_input = st.text_input("Transaction / Reference ID",
                         placeholder="e.g. TXN123456789 or 12345678",
                         help="The Transaction ID / Reference Number from your payment confirmation",
-                        key="txn_id_input"
-                    )
-                    txn_note = st.text_area(
-                        "Additional notes (optional)",
+                        key="txn_id_input")
+                    txn_note = st.text_area("Additional notes (optional)",
                         placeholder="Any extra info about your payment...",
-                        height=80,
-                        key="txn_note_input"
-                    )
-
+                        height=80, key="txn_note_input")
                 with sub_col2:
                     st.markdown(f"""
                     <div style="background:{BG3};border:1px solid {BORDER};border-radius:14px;padding:1.25rem;margin-top:1.5rem">
                       <div style="font-size:.65rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{TEXT3};margin-bottom:.75rem">📦 Order Summary</div>
-                      <div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid {BORDER}">
-                        <span style="font-size:.8rem;color:{TEXT2}">Plan</span>
-                        <span style="font-size:.8rem;font-weight:700;color:{PRICING[selected_plan]['color']}">{selected_plan.title()}</span>
-                      </div>
-                      <div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid {BORDER}">
-                        <span style="font-size:.8rem;color:{TEXT2}">Billing</span>
-                        <span style="font-size:.8rem;font-weight:700;color:{TEXT1}">{'Annual' if is_ann else 'Monthly'}</span>
-                      </div>
-                      <div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid {BORDER}">
-                        <span style="font-size:.8rem;color:{TEXT2}">Amount (USD)</span>
-                        <span style="font-size:.8rem;font-weight:700;color:{TEXT1}">${amount_usd}/mo</span>
-                      </div>
-                      <div style="display:flex;justify-content:space-between;padding:.5rem 0">
-                        <span style="font-size:.85rem;font-weight:700;color:{TEXT1}">Total (PKR)</span>
-                        <span style="font-size:.9rem;font-weight:900;color:{ACCENTY}">PKR {amount_pkr:,.0f}</span>
-                      </div>
+                      <div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid {BORDER}"><span style="font-size:.8rem;color:{TEXT2}">Plan</span><span style="font-size:.8rem;font-weight:700;color:{PRICING[selected_plan]['color']}">{selected_plan.title()}</span></div>
+                      <div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid {BORDER}"><span style="font-size:.8rem;color:{TEXT2}">Billing</span><span style="font-size:.8rem;font-weight:700;color:{TEXT1}">{'Annual' if is_ann else 'Monthly'}</span></div>
+                      <div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid {BORDER}"><span style="font-size:.8rem;color:{TEXT2}">Amount (USD)</span><span style="font-size:.8rem;font-weight:700;color:{TEXT1}">${amount_usd}/mo</span></div>
+                      <div style="display:flex;justify-content:space-between;padding:.5rem 0"><span style="font-size:.85rem;font-weight:700;color:{TEXT1}">Total (PKR)</span><span style="font-size:.9rem;font-weight:900;color:{ACCENTY}">PKR {amount_pkr:,.0f}</span></div>
                     </div>""", unsafe_allow_html=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button(f"✅ Submit Payment & Request Upgrade", key="submit_payment"):
+                if st.button("✅ Submit Payment & Request Upgrade", key="submit_payment"):
                     if not txn_input.strip():
                         st.error("❌ Please enter your Transaction ID / Reference Number.")
                     else:
                         pay_id = save_payment_request(
-                            email=uemail_global,
-                            plan=selected_plan,
+                            email=uemail_global, plan=selected_plan,
                             billing="annual" if is_ann else "monthly",
-                            amount=amount_pkr,
-                            payment_method=st.session_state.selected_pm,
-                            txn_id=txn_input.strip(),
-                            user_name=uname_global
+                            amount=amount_pkr, payment_method=st.session_state.selected_pm,
+                            txn_id=txn_input.strip(), user_name=uname_global
                         )
                         log_activity(uemail_global, "payment_submitted", f"{selected_plan} | PKR {amount_pkr:,.0f} | {pay_id}")
                         email_sent = notify_payment_submitted(
@@ -1913,37 +1886,28 @@ if st.session_state.data is not None:
 **Payment ID:** `{pay_id}`
 
 We'll verify your payment within **2-24 hours** and activate your {selected_plan.title()} plan.
-You'll see your plan update automatically on next login.
                         """)
-                        # Show email delivery status
                         if email_sent:
                             st.info("📧 Notification email sent to admin successfully.")
                         else:
-                            # Read the error from log
                             email_log = load_json("dataforge_email_log.json")
-                            last_entries = list(email_log.items())
                             last_err_msg = ""
-                            for ts, entry in reversed(last_entries):
+                            for ts, entry in reversed(list(email_log.items())):
                                 if "error" in entry:
-                                    last_err_msg = entry.get("error", "")
-                                    break
+                                    last_err_msg = entry.get("error", ""); break
                             st.warning(
-                                f"⚠️ **Admin email notification failed.** Your payment IS saved (ID: `{pay_id}`), "
-                                f"but the admin email could not be sent.\n\n"
-                                f"**Fix:** Gmail requires an **App Password** (not your regular password). "
-                                f"Go to **myaccount.google.com → Security → 2-Step Verification → App passwords**, "
-                                f"generate one for 'Mail', and set it as `SMTP_PASS` in your Streamlit secrets.\n\n"
-                                + (f"**Error:** `{last_err_msg}`" if last_err_msg else "")
+                                f"⚠️ **Admin email notification failed.** Your payment IS saved (ID: `{pay_id}`).  \n"
+                                f"**Fix:** Gmail App Password required — myaccount.google.com → Security → App passwords."
+                                + (f"\n\n**Error:** `{last_err_msg}`" if last_err_msg else "")
                             )
                         st.balloons()
 
-            st.markdown("</div>", unsafe_allow_html=True)  # close payment flow div
+            st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
         # ── PAYMENT HISTORY ──
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">📋</div><h3>My Payment History</h3></div>""", unsafe_allow_html=True)
-
         user_payments = get_user_payments(uemail_global)
         if not user_payments:
             st.markdown(f"""
@@ -1956,35 +1920,23 @@ You'll see your plan update automatically on next login.
                 status      = pay.get("status","pending")
                 status_icon = "⏳" if status=="pending" else ("✅" if status=="approved" else "❌")
                 plan_c      = PRICING.get(pay.get("plan",""),{}).get("color",TEXT2)
-                pay_plan    = pay.get("plan","?").upper()
-                pay_billing = pay.get("billing","monthly").title()
-                pay_amount  = f"{pay.get('amount',0):,.0f}"
-                pay_method  = pay.get("payment_method","?").replace("_"," ").title()
-                pay_txn     = pay.get("txn_id","?")
-                pay_date    = pay.get("submitted_at","")[:16]
-                pay_id_disp = pay.get("id","")
                 badge_bg,badge_bdr,badge_col = (
                     ("rgba(251,191,36,0.12)","rgba(251,191,36,0.40)","#fbbf24") if status=="pending" else
                     ("rgba(74,222,128,0.12)","rgba(74,222,128,0.40)","#4ade80") if status=="approved" else
                     ("rgba(248,113,113,0.12)","rgba(248,113,113,0.40)","#f87171")
                 )
-                # Build card as concatenated single-line strings — avoids Streamlit markdown/code-block parsing
                 h  = f'<div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:16px;padding:1.25rem;margin-bottom:.75rem;position:relative;overflow:hidden">'
                 h += f'<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,{plan_c},{badge_col})"></div>'
-                h += f'<div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-top:.2rem">'
-                h += f'<div style="flex:1;min-width:180px">'
-                h += f'<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem">'
-                h += f'<span style="font-size:.7rem;font-weight:800;color:{plan_c};background:{plan_c}22;border:1px solid {plan_c}55;border-radius:6px;padding:.15rem .5rem">{pay_plan}</span>'
-                h += f'<span style="font-size:.7rem;color:{TEXT3}">{pay_billing} billing</span></div>'
-                h += f'<div style="font-size:.88rem;font-weight:700;color:{TEXT1}">PKR {pay_amount} <span style="font-size:.75rem;font-weight:400;color:{TEXT2}">via {pay_method}</span></div>'
-                h += f'<div style="font-size:.7rem;color:{TEXT3};margin-top:.2rem;font-family:monospace">Txn: {pay_txn}</div>'
-                h += f'<div style="font-size:.67rem;color:{TEXT3};margin-top:.1rem">{pay_date}</div>'
-                h += f'</div>'
+                h += f'<div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-top:.2rem"><div style="flex:1;min-width:180px">'
+                h += f'<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem"><span style="font-size:.7rem;font-weight:800;color:{plan_c};background:{plan_c}22;border:1px solid {plan_c}55;border-radius:6px;padding:.15rem .5rem">{pay.get("plan","?").upper()}</span><span style="font-size:.7rem;color:{TEXT3}">{pay.get("billing","monthly").title()} billing</span></div>'
+                h += f'<div style="font-size:.88rem;font-weight:700;color:{TEXT1}">PKR {pay.get("amount",0):,.0f} <span style="font-size:.75rem;font-weight:400;color:{TEXT2}">via {pay.get("payment_method","?").replace("_"," ").title()}</span></div>'
+                h += f'<div style="font-size:.7rem;color:{TEXT3};margin-top:.2rem;font-family:monospace">Txn: {pay.get("txn_id","?")}</div>'
+                h += f'<div style="font-size:.67rem;color:{TEXT3};margin-top:.1rem">{pay.get("submitted_at","")[:16]}</div></div>'
                 h += f'<div style="display:flex;flex-direction:column;align-items:flex-end;gap:.35rem">'
                 h += f'<span style="display:inline-flex;align-items:center;gap:.35rem;padding:.35rem .85rem;border-radius:999px;font-size:.77rem;font-weight:800;background:{badge_bg};border:1px solid {badge_bdr};color:{badge_col}">{status_icon} {status.upper()}</span>'
                 if pay.get("processed_at"):
                     h += f'<div style="font-size:.67rem;color:#6b7280">✓ Approved: {pay["processed_at"][:16]}</div>'
-                h += f'<div style="font-size:.64rem;color:{TEXT3};font-family:monospace">{pay_id_disp}</div>'
+                h += f'<div style="font-size:.64rem;color:{TEXT3};font-family:monospace">{pay.get("id","")}</div>'
                 h += f'</div></div>'
                 if pay.get("admin_note"):
                     h += f'<div style="margin-top:.5rem;font-size:.74rem;color:#9ca3af;background:#1a1a1a;border-radius:8px;padding:.35rem .7rem">📝 {pay["admin_note"]}</div>'
@@ -1994,7 +1946,6 @@ You'll see your plan update automatically on next login.
         # ── FAQ ──
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">❓</div><h3>Frequently Asked Questions</h3></div>""", unsafe_allow_html=True)
-
         faqs = [
             ("How long does activation take?", "Usually within 2-4 hours on business days. Maximum 24 hours. We manually verify each payment to prevent fraud."),
             ("What if I send the wrong amount?", "Don't worry! Contact us with your Payment ID and correct Transaction ID. We'll sort it out."),
@@ -2008,7 +1959,7 @@ You'll see your plan update automatically on next login.
                 st.markdown(f'<p style="color:{TEXT2};font-size:.9rem;line-height:1.7;margin:0">{a}</p>', unsafe_allow_html=True)
 
 else:
-    # ── WELCOME SCREEN — no interactive widgets (avoids duplicate key errors) ──
+    # ── WELCOME SCREEN ──
     st.markdown(f"""
     <div class="hero-wrap slide-up">
       <h1>Drop Your Data.<br>We Do the Rest.</h1>
@@ -2016,13 +1967,12 @@ else:
     </div>""", unsafe_allow_html=True)
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-    # Feature cards
     f1, f2, f3, f4 = st.columns(4)
     feats = [
-        ("🧬","Smart EDA",       "Correlation heatmaps, distribution explorer, scatter builder, and missing value charts."),
-        ("⚡","AutoML Engine",   "15+ algorithms compared with k-fold cross-validation. Best model wins — automatically."),
-        ("🎯","Smart Detection", "Auto-detects regression vs classification. Warns about ID columns. Quick data cleaning."),
-        ("🏆","Rich Results",    "Trophy banner, radar + scatter + bar charts, metric breakdown, model export."),
+        ("🧬","Smart EDA","Correlation heatmaps, distribution explorer, scatter builder, and missing value charts."),
+        ("⚡","AutoML Engine","15+ algorithms compared with k-fold cross-validation. Best model wins — automatically."),
+        ("🎯","Smart Detection","Auto-detects regression vs classification. Warns about ID columns. Quick data cleaning."),
+        ("🏆","Rich Results","Trophy banner, radar + scatter + bar charts, metric breakdown, model export."),
     ]
     for col, (icon, title, desc) in zip([f1, f2, f3, f4], feats):
         with col:
@@ -2033,72 +1983,36 @@ else:
             </div>""", unsafe_allow_html=True)
 
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-
-    # Static pricing preview — pure HTML, no Streamlit widgets (no key conflicts)
     st.markdown(f"""
     <div style="text-align:center;margin-bottom:1.5rem">
-      <div style="font-size:1.4rem;font-weight:900;background:{HERO_H1_GRAD};
-                  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-                  background-clip:text">💎 Plans & Pricing</div>
-      <div style="font-size:.875rem;color:{TEXT2};margin-top:.3rem">
-        Upgrade after loading a dataset · Use the 💳 Upgrade tab
-      </div>
+      <div style="font-size:1.4rem;font-weight:900;background:{HERO_H1_GRAD};-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">💎 Plans & Pricing</div>
+      <div style="font-size:.875rem;color:{TEXT2};margin-top:.3rem">Upgrade after loading a dataset · Use the 💳 Upgrade tab</div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1.25rem;margin-bottom:2rem">
-
-      <!-- FREE -->
       <div style="background:{CARD_BG};border:2px solid {BORDER};border-radius:20px;padding:1.75rem">
         <div style="font-size:2rem;margin-bottom:.5rem">🌱</div>
         <div style="font-size:1.1rem;font-weight:900;color:{TEXT1}">Free</div>
         <div style="font-size:2.5rem;font-weight:900;color:{TEXT1};margin:.5rem 0 .25rem">$0</div>
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">forever free</div>
-        <div style="font-size:.82rem;color:{TEXT2};line-height:2">
-          ✓ 3 datasets/month<br>✓ 5 basic algorithms<br>✓ 3-fold CV<br>
-          <span style="color:{TEXT3}">✗ XGBoost / LightGBM<br>✗ Model export (.pkl)<br>✗ API access</span>
-        </div>
-        <div style="margin-top:1.25rem;padding:.6rem;background:rgba(107,114,128,0.12);
-                    border-radius:10px;text-align:center;font-size:.8rem;font-weight:700;color:#9ca3af">
-          ✓ Your Current Plan
-        </div>
+        <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ 3 datasets/month<br>✓ 5 basic algorithms<br>✓ 3-fold CV<br><span style="color:{TEXT3}">✗ XGBoost / LightGBM<br>✗ Model export (.pkl)<br>✗ API access</span></div>
+        <div style="margin-top:1.25rem;padding:.6rem;background:rgba(107,114,128,0.12);border-radius:10px;text-align:center;font-size:.8rem;font-weight:700;color:#9ca3af">✓ Your Current Plan</div>
       </div>
-
-      <!-- PRO -->
-      <div style="background:{CARD_BG};border:2px solid #4ade80;border-radius:20px;padding:1.75rem;
-                  position:relative;box-shadow:0 0 28px rgba(74,222,128,0.12)">
-        <div style="position:absolute;top:.9rem;right:.9rem;background:linear-gradient(135deg,#16a34a,#22c55e);
-                    color:white;font-size:.62rem;font-weight:800;padding:.2rem .6rem;
-                    border-radius:999px;text-transform:uppercase;letter-spacing:.05em">⭐ Most Popular</div>
+      <div style="background:{CARD_BG};border:2px solid #4ade80;border-radius:20px;padding:1.75rem;position:relative;box-shadow:0 0 28px rgba(74,222,128,0.12)">
+        <div style="position:absolute;top:.9rem;right:.9rem;background:linear-gradient(135deg,#16a34a,#22c55e);color:white;font-size:.62rem;font-weight:800;padding:.2rem .6rem;border-radius:999px;text-transform:uppercase;letter-spacing:.05em">⭐ Most Popular</div>
         <div style="font-size:2rem;margin-bottom:.5rem">⚡</div>
         <div style="font-size:1.1rem;font-weight:900;color:{TEXT1}">Pro</div>
         <div style="font-size:2.5rem;font-weight:900;color:#4ade80;margin:.5rem 0 .25rem">$19<span style="font-size:1rem;font-weight:400;color:{TEXT3}">/mo</span></div>
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">or $15/mo billed annually</div>
-        <div style="font-size:.82rem;color:{TEXT2};line-height:2">
-          ✓ Unlimited datasets<br>✓ 15+ algorithms<br>✓ 10-fold CV<br>
-          ✓ XGBoost, LightGBM, CatBoost<br>✓ Export model (.pkl)<br>✓ 50-entry history
-        </div>
-        <div style="margin-top:1.25rem;padding:.6rem;
-                    background:linear-gradient(135deg,rgba(74,222,128,0.15),rgba(74,222,128,0.08));
-                    border:1px solid rgba(74,222,128,0.35);border-radius:10px;
-                    text-align:center;font-size:.82rem;font-weight:800;color:#4ade80">
-          ⚡ Load a dataset → 💳 Upgrade tab
-        </div>
+        <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ Unlimited datasets<br>✓ 15+ algorithms<br>✓ 10-fold CV<br>✓ XGBoost, LightGBM, CatBoost<br>✓ Export model (.pkl)<br>✓ 50-entry history</div>
+        <div style="margin-top:1.25rem;padding:.6rem;background:linear-gradient(135deg,rgba(74,222,128,0.15),rgba(74,222,128,0.08));border:1px solid rgba(74,222,128,0.35);border-radius:10px;text-align:center;font-size:.82rem;font-weight:800;color:#4ade80">⚡ Load a dataset → 💳 Upgrade tab</div>
       </div>
-
-      <!-- ENTERPRISE -->
       <div style="background:{CARD_BG};border:2px solid {BORDER};border-radius:20px;padding:1.75rem">
         <div style="font-size:2rem;margin-bottom:.5rem">🏢</div>
         <div style="font-size:1.1rem;font-weight:900;color:{TEXT1}">Enterprise</div>
         <div style="font-size:2.5rem;font-weight:900;color:#c084fc;margin:.5rem 0 .25rem">$79<span style="font-size:1rem;font-weight:400;color:{TEXT3}">/mo</span></div>
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">or $63/mo billed annually</div>
-        <div style="font-size:.82rem;color:{TEXT2};line-height:2">
-          ✓ Everything in Pro<br>✓ Unlimited history<br>✓ REST API access<br>
-          ✓ Unlimited team members<br>✓ Dedicated support<br>✓ SLA guarantee
-        </div>
-        <div style="margin-top:1.25rem;padding:.6rem;
-                    background:rgba(192,132,252,0.10);border:1px solid rgba(192,132,252,0.30);
-                    border-radius:10px;text-align:center;font-size:.82rem;font-weight:800;color:#c084fc">
-          🏢 Load a dataset → 💳 Upgrade tab
-        </div>
+        <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ Everything in Pro<br>✓ Unlimited history<br>✓ REST API access<br>✓ Unlimited team members<br>✓ Dedicated support<br>✓ SLA guarantee</div>
+        <div style="margin-top:1.25rem;padding:.6rem;background:rgba(192,132,252,0.10);border:1px solid rgba(192,132,252,0.30);border-radius:10px;text-align:center;font-size:.82rem;font-weight:800;color:#c084fc">🏢 Load a dataset → 💳 Upgrade tab</div>
       </div>
     </div>
     <div style="text-align:center;color:{TEXT3};font-size:.82rem;padding-bottom:1.5rem">
