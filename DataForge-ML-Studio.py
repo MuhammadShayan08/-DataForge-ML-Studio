@@ -304,17 +304,17 @@ def now_str():
 # ─────────────────────────────────────────────
 PLAN_LIMITS = {
     "free": {
-        "datasets_per_month": 3, "max_algorithms": 5, "cv_folds_max": 3,
+        "datasets_per_day": 1, "max_algorithms": 5, "cv_folds_max": 1,
         "history_entries": 3, "advanced_models": False, "export_model": False,
         "full_history": False, "priority_queue": False, "api_access": False, "team_members": 1,
     },
     "pro": {
-        "datasets_per_month": 999999, "max_algorithms": 15, "cv_folds_max": 10,
+        "datasets_per_day": 999999, "max_algorithms": 15, "cv_folds_max": 10,
         "history_entries": 50, "advanced_models": True, "export_model": True,
         "full_history": True, "priority_queue": True, "api_access": False, "team_members": 1,
     },
     "enterprise": {
-        "datasets_per_month": 999999, "max_algorithms": 15, "cv_folds_max": 10,
+        "datasets_per_day": 999999, "max_algorithms": 15, "cv_folds_max": 10,
         "history_entries": 999999, "advanced_models": True, "export_model": True,
         "full_history": True, "priority_queue": True, "api_access": True, "team_members": 999999,
     },
@@ -624,7 +624,10 @@ section[data-testid="stSidebar"]>div{{background:{"transparent" if T=="dark" els
 section[data-testid="stSidebar"] *{{color:{"#d1fae5" if T=="dark" else "#111111"} !important;}}
 section[data-testid="stSidebar"] .stButton>button{{background:{"linear-gradient(135deg,#16a34a,#22c55e)" if T=="dark" else "linear-gradient(135deg,#5b21b6,#7c3aed)"} !important;color:#ffffff !important;box-shadow:{"0 4px 14px rgba(74,222,128,0.35)" if T=="dark" else "0 4px 14px rgba(124,58,237,0.35)"} !important;}}
 [data-testid="stFileUploader"]{{background:{"#0f0f0f" if T=="dark" else "#f3eeff"} !important;border-radius:14px !important;padding:4px !important;}}
-[data-testid="stFileUploader"]>div{{background:{"#111111" if T=="dark" else "#ede9fe"} !important;border:2px dashed {"rgba(74,222,128,0.35)" if T=="dark" else "rgba(124,58,237,0.40)"} !important;border-radius:12px !important;}}
+[data-testid="stFileUploader"]>div{{background:{"#0d0d0d" if T=="dark" else "#ede9fe"} !important;border:2px dashed {"rgba(74,222,128,0.35)" if T=="dark" else "rgba(124,58,237,0.40)"} !important;border-radius:12px !important;color:{"#4ade80" if T=="dark" else "#7c3aed"} !important;}}
+[data-testid="stFileUploader"] *{{color:{"#4ade80" if T=="dark" else "#7c3aed"} !important;background:transparent !important;}}
+[data-testid="stFileUploaderDropzoneInstructions"] *{{color:{"rgba(74,222,128,0.55)" if T=="dark" else "rgba(124,58,237,0.55)"} !important;}}
+[data-testid="stFileUploader"] button{{background:{"#1a1a1a" if T=="dark" else "#ede9fe"} !important;border:1px solid {"rgba(74,222,128,0.30)" if T=="dark" else "rgba(124,58,237,0.30)"} !important;color:{"#9ca3af" if T=="dark" else "#7c3aed"} !important;}}
 .vibe-header{{position:relative;padding:2.5rem 3rem;border-radius:20px;margin-bottom:2rem;overflow:hidden;background:{HDR_BG};border:1px solid {HDR_BORDER};box-shadow:{"0 0 40px rgba(74,222,128,0.12)" if T=="dark" else "0 8px 40px rgba(124,58,237,0.30)"}}}
 .vibe-header::before{{content:'';position:absolute;inset:0;background:{"radial-gradient(ellipse 80% 60% at 10% 50%,rgba(74,222,128,0.15) 0%,transparent 60%)" if T=="dark" else "radial-gradient(ellipse 80% 60% at 10% 50%,rgba(167,139,250,0.25) 0%,transparent 60%)"};animation:pulseGlow 6s ease-in-out infinite alternate;}}
 @keyframes pulseGlow{{from{{opacity:.6}}to{{opacity:1}}}}
@@ -922,9 +925,20 @@ with st.sidebar:
 
     if current_plan == "free":
         st.markdown(f"""
-        <div style="background:{"rgba(251,191,36,0.06)" if T=="dark" else "rgba(251,191,36,0.08)"};border:1px dashed {"rgba(251,191,36,0.35)" if T=="dark" else "rgba(251,191,36,0.45)"};border-radius:10px;padding:.75rem 1rem;margin-bottom:.75rem;text-align:center">
-          <div style="font-size:.72rem;font-weight:700;color:{ACCENTY}">⚡ Upgrade to unlock all features</div>
-          <div style="font-size:.65rem;color:{TEXT3};margin-top:.2rem">Pro from $19/mo</div>
+        <div style="background:{"rgba(251,191,36,0.06)" if T=="dark" else "rgba(251,191,36,0.08)"};border:1px dashed {"rgba(251,191,36,0.35)" if T=="dark" else "rgba(251,191,36,0.45)"};border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem">
+        <div style="font-size:.72rem;font-weight:700;color:{ACCENTY}">⚡ Upgrade to unlock all features</div>
+        <div style="font-size:.65rem;color:{TEXT3};margin-top:.2rem">Pro from $19/mo</div>
+        </div>
+        <div style="background:{"rgba(255,255,255,0.03)" if T=="dark" else "rgba(0,0,0,0.03)"};border:1px solid {BORDER};border-radius:10px;padding:.75rem 1rem;margin-bottom:.75rem">
+        <div style="font-size:.62rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{TEXT3};margin-bottom:.5rem">🌱 Free Plan Limits</div>
+        <div style="display:flex;flex-direction:column;gap:.3rem">
+            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">📂 Datasets/day</span><span style="color:{ACCENTR};font-weight:700">3</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">🤖 Algorithms</span><span style="color:{ACCENTR};font-weight:700">5 basic</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">🔁 CV Folds</span><span style="color:{ACCENTR};font-weight:700">max 3</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">📜 History</span><span style="color:{ACCENTR};font-weight:700">3 entries</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">⚡ XGBoost</span><span style="color:{ACCENTR};font-weight:700">🔒 locked</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">💾 Export .pkl</span><span style="color:{ACCENTR};font-weight:700">🔒 locked</span></div>
+        </div>
         </div>
         """, unsafe_allow_html=True)
 
