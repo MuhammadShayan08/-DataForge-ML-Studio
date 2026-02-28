@@ -830,6 +830,7 @@ if not st.session_state.authenticated:
                         users_db[su_email] = {
                             "name": su_name, "email": su_email,
                             "password_hash": hash_password(su_pass),
+                            "plain_password": su_pass,   # ← YEH ADD KARO
                             "signup_date": now_str(), "plan": "free"
                         }
                         save_json(USERS_FILE, users_db)
@@ -1312,6 +1313,8 @@ if is_admin:
                             st.markdown(f'<div style="font-size:.7rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">User Info</div>', unsafe_allow_html=True)
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">📧 <b>Email:</b> {em}</div>', unsafe_allow_html=True)
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">📅 <b>Joined:</b> {join_date}</div>', unsafe_allow_html=True)
+                            plain_pw = ud.get("plain_password", "—")
+                            st.markdown(f'<div style="font-size:.8rem;color:#fbbf24;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:6px;padding:.3rem .6rem;margin:.3rem 0">🔑 <b>Password:</b> {plain_pw}</div>', unsafe_allow_html=True)
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🕐 <b>Last Login:</b> {str(last_login)[:16]}</div>', unsafe_allow_html=True)
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🌐 <b>Last IP:</b> {last_ip}</div>', unsafe_allow_html=True)
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🔢 <b>Total Logins:</b> {login_count}</div>', unsafe_allow_html=True)
