@@ -98,9 +98,9 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
     if original_rows > MAX_ROWS_TRAINING:
         df_train = smart_sample(df, target_col, MAX_ROWS_TRAINING)
         warnings_list.append(
-            f"⚠️ Dataset {original_rows:,} rows tha — Streamlit Cloud free tier ke liye "
-            f"**{MAX_ROWS_TRAINING:,} rows** par auto-sample kar diya. "
-            f"Accuracy thodi kam ho sakti hai lekin crash nahi hoga."
+                  f"⚠️ Dataset {original_rows:,} rows were there — Streamlit Cloud free tier auto-sampled to "
+                  f"**{MAX_ROWS_TRAINING:,} rows**. "
+                  f"Accuracy may be slightly lower but it won't crash."
         )
     elif original_rows > MAX_ROWS_WARNING:
         df_train = df.copy()
@@ -1349,7 +1349,7 @@ if st.session_state.data is not None:
         # Memory warning
         mem_now = get_memory_usage_mb()
         if mem_now > 350:
-            st.warning(f"⚠️ **High Memory ({mem_now:.0f}MB/512MB)** — Training se pehle page refresh kar lo (Ctrl+R).")
+            st.warning(f"⚠️ **High Memory ({mem_now:.0f}MB/512MB)**")
 
         tc1, tc2 = st.columns([3, 1])
         with tc1:
@@ -1387,8 +1387,8 @@ if st.session_state.data is not None:
             # Dataset size advisory
             if len(df) > MAX_ROWS_TRAINING:
                 st.error(
-                    f"🚨 **Dataset {len(df):,} rows** — Streamlit Cloud ke liye bahut bada hai.  \n"
-                    f"Training automatically **{MAX_ROWS_TRAINING:,} rows** par sample karega (stratified)."
+                    f"🚨 **Dataset {len(df):,} rows** — Streamlit Cloud is too large for this.  \n"
+                    f"Training will automatically sample **{MAX_ROWS_TRAINING:,} rows** (stratified)."
                 )
             elif len(df) > MAX_ROWS_WARNING:
                 st.warning(
@@ -1433,7 +1433,7 @@ if st.session_state.data is not None:
                 st.markdown(
                     f'<div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.30);'
                     f'border-radius:8px;padding:.6rem .9rem;font-size:.78rem;color:{ACCENTY}">'
-                    f'💡 <b>Memory Tip:</b> Kam folds = kam RAM. Bade datasets pe 2-3 fold use karo.</div>',
+                    f'💡 <b>Memory Tip:</b> Fewer folds = less RAM. For larger datasets, use 2-3 folds.</div>',
                     unsafe_allow_html=True
                 )
 
@@ -1524,7 +1524,7 @@ if st.session_state.data is not None:
 
                     status_box.success(
                         f"✅ Training complete in **{fmt_time(elapsed)}** "
-                        f"({trained_rows:,} rows) — 🏆 Results tab check karo!"
+                        f"({trained_rows:,} rows) — 🏆 Check the Results tab!"
                     )
                     if not has_advanced:
                         st.info("💡 Upgrade to Pro for XGBoost, LightGBM, and CatBoost!")
