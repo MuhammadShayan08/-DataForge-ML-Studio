@@ -623,10 +623,8 @@ section[data-testid="stSidebar"]{{background:{"linear-gradient(180deg,#0a0a0a 0%
 section[data-testid="stSidebar"]>div{{background:{"transparent" if T=="dark" else "#f7f7fb"} !important;}}
 section[data-testid="stSidebar"] *{{color:{"#d1fae5" if T=="dark" else "#111111"} !important;}}
 section[data-testid="stSidebar"] .stButton>button{{background:{"linear-gradient(135deg,#16a34a,#22c55e)" if T=="dark" else "linear-gradient(135deg,#5b21b6,#7c3aed)"} !important;color:#ffffff !important;box-shadow:{"0 4px 14px rgba(74,222,128,0.35)" if T=="dark" else "0 4px 14px rgba(124,58,237,0.35)"} !important;}}
-[data-testid="stFileUploader"]{{background:#0f0f0f !important;border-radius:14px !important;padding:4px !important;}}
-[data-testid="stFileUploader"]>div{{background:#111111 !important;border:2px dashed rgba(74,222,128,0.35) !important;border-radius:12px !important;}}
-[data-testid="stFileUploader"] *{{color:#d1fae5 !important;}}
-[data-testid="stFileUploader"] button{{background:#1c1c1c !important;border:1px solid #333 !important;color:#d1fae5 !important;border-radius:8px !important;}}
+[data-testid="stFileUploader"]{{background:{"#0f0f0f" if T=="dark" else "#f3eeff"} !important;border-radius:14px !important;padding:4px !important;}}
+[data-testid="stFileUploader"]>div{{background:{"#111111" if T=="dark" else "#ede9fe"} !important;border:2px dashed {"rgba(74,222,128,0.35)" if T=="dark" else "rgba(124,58,237,0.40)"} !important;border-radius:12px !important;}}
 .vibe-header{{position:relative;padding:2.5rem 3rem;border-radius:20px;margin-bottom:2rem;overflow:hidden;background:{HDR_BG};border:1px solid {HDR_BORDER};box-shadow:{"0 0 40px rgba(74,222,128,0.12)" if T=="dark" else "0 8px 40px rgba(124,58,237,0.30)"}}}
 .vibe-header::before{{content:'';position:absolute;inset:0;background:{"radial-gradient(ellipse 80% 60% at 10% 50%,rgba(74,222,128,0.15) 0%,transparent 60%)" if T=="dark" else "radial-gradient(ellipse 80% 60% at 10% 50%,rgba(167,139,250,0.25) 0%,transparent 60%)"};animation:pulseGlow 6s ease-in-out infinite alternate;}}
 @keyframes pulseGlow{{from{{opacity:.6}}to{{opacity:1}}}}
@@ -914,27 +912,19 @@ with st.sidebar:
     name_color   = "#9ca3af" if T == "dark" else "#888888"
 
     st.markdown(f"""
-    <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:.65rem 1rem;margin-bottom:.75rem;display:flex;align-items:center;gap:.65rem">
-      <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,rgba(74,222,128,0.25),rgba(96,165,250,0.15));border:1.5px solid rgba(74,222,128,0.4);display:flex;align-items:center;justify-content:center;font-size:.95rem;flex-shrink:0">{plan_icon}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:.78rem;font-weight:700;color:#e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{uname_global}</div>
-        <div style="display:flex;align-items:center;gap:.35rem;margin-top:.15rem">
-          <span style="font-size:.6rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:{'#4ade80' if current_plan=='pro' else '#c084fc' if current_plan=='enterprise' else '#9ca3af'};background:{'rgba(74,222,128,0.12)' if current_plan=='pro' else 'rgba(192,132,252,0.12)' if current_plan=='enterprise' else 'rgba(107,114,128,0.12)'};border:1px solid {'rgba(74,222,128,0.35)' if current_plan=='pro' else 'rgba(192,132,252,0.35)' if current_plan=='enterprise' else 'rgba(107,114,128,0.25)'};padding:.1rem .45rem;border-radius:999px">{plan_icon} {current_plan.upper()}</span>
-          {'<span style="font-size:.58rem;color:#6b7280">' + plan_expiry_sb + '</span>' if plan_expiry_sb and current_plan != "free" else ""}
-        </div>
-      </div>
+    <div class="sidebar-section" style="text-align:center">
+      <div style="font-size:1.5rem;margin-bottom:.3rem">{plan_icon}</div>
+      <div style="font-size:.75rem;font-weight:700;color:{name_color};margin-bottom:.3rem">{uname_global}</div>
+      <span class="plan-badge {current_plan}">{plan_icon} {current_plan.upper()} Plan</span>
+      {expiry_html}{expired_html}
     </div>
-    {'<div style="font-size:.65rem;color:#f87171;text-align:center;margin-bottom:.5rem">⚠️ Plan expired</div>' if plan_expired_sb else ""}
     """, unsafe_allow_html=True)
 
     if current_plan == "free":
         st.markdown(f"""
-        <div style="background:rgba(251,191,36,0.06);border:1px dashed rgba(251,191,36,0.30);border-radius:8px;padding:.45rem .85rem;margin-bottom:.65rem;display:flex;align-items:center;gap:.5rem">
-          <span style="font-size:.85rem">⚡</span>
-          <div>
-            <div style="font-size:.68rem;font-weight:700;color:#fbbf24;line-height:1.2">Upgrade to Pro</div>
-            <div style="font-size:.6rem;color:#6b7280">from $19/mo</div>
-          </div>
+        <div style="background:{"rgba(251,191,36,0.06)" if T=="dark" else "rgba(251,191,36,0.08)"};border:1px dashed {"rgba(251,191,36,0.35)" if T=="dark" else "rgba(251,191,36,0.45)"};border-radius:10px;padding:.75rem 1rem;margin-bottom:.75rem;text-align:center">
+          <div style="font-size:.72rem;font-weight:700;color:{ACCENTY}">⚡ Upgrade to unlock all features</div>
+          <div style="font-size:.65rem;color:{TEXT3};margin-top:.2rem">Pro from $19/mo</div>
         </div>
         """, unsafe_allow_html=True)
 
