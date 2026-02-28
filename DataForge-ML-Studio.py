@@ -1294,7 +1294,7 @@ if st.session_state.data is not None:
                     fig = px.bar(x=vc.index, y=vc.values, color=vc.values, color_continuous_scale=[ACCENT2, ACCENT1], template=CHART_TEMPLATE, title=f"Top values · {col_pick}")
                     fig.update_layout(showlegend=False, coloraxis_showscale=False)
                 fig.update_layout(**chart_layout(height=340))
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='content')
 
             with cv2:
                 s = df[col_pick]
@@ -1316,7 +1316,7 @@ if st.session_state.data is not None:
                     zmid=0, text=corr.values.round(2), texttemplate="%{text}",
                     textfont=dict(size=9, family="JetBrains Mono")))
                 fig_h.update_layout(**chart_layout(height=460))
-                st.plotly_chart(fig_h, use_container_width=True)
+                st.plotly_chart(fig, width='content')
 
     # ═══════════════════════════
     # TAB 3 — TRAIN MODEL
@@ -1523,7 +1523,7 @@ if st.session_state.data is not None:
                     marker_color=colors, text=top6[metric_name].round(4), textposition="inside",
                     textfont=dict(size=10, color="white")))
                 fig_b.update_layout(**chart_layout(height=360, title=f"Top Models · {metric_name}", yaxis=dict(autorange="reversed")))
-                st.plotly_chart(fig_b, use_container_width=True)
+                st.plotly_chart(fig, width='content')
             with ch2:
                 rc = num_res[:6]
                 bv = res_df.iloc[0][rc]
@@ -1536,7 +1536,7 @@ if st.session_state.data is not None:
                 fig_r.update_layout(**chart_layout(height=360, showlegend=False, title="Best Model · Metrics Radar",
                     polar=dict(bgcolor=CHART_PAPER, radialaxis=dict(visible=True, range=[0,1], gridcolor=BORDER),
                                angularaxis=dict(gridcolor=BORDER))))
-                st.plotly_chart(fig_r, use_container_width=True)
+                st.plotly_chart(fig, width='content')
 
     # ═══════════════════════════
     # TAB 5 — MY HISTORY
