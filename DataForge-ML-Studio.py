@@ -245,7 +245,7 @@ PAYMENT_METHODS = {
     "bank_transfer": {
         "name": "Bank Transfer", "icon": "🏦",
         "bank": "Sadapay", "account_title": "Zubair Anjum Lodhi",
-        "account_number": "01234567890123", "iban": "PK36MEZN0001234567890123",
+        "account_number": "0308-0203807", "iban": "PK96SADA0000003080203807",
         "branch": "Lahore Main Branch",
         "instructions": [
             "Go to your bank app or branch",
