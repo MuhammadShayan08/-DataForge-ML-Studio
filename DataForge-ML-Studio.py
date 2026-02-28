@@ -919,26 +919,60 @@ with st.sidebar:
       <div style="font-size:1.5rem;margin-bottom:.3rem">{plan_icon}</div>
       <div style="font-size:.75rem;font-weight:700;color:{name_color};margin-bottom:.3rem">{uname_global}</div>
       <span class="plan-badge {current_plan}">{plan_icon} {current_plan.upper()} Plan</span>
-      {expiry_html}{expired_html}
+        {expiry_html}{expired_html}
     </div>
     """, unsafe_allow_html=True)
 
+    # ── Free plan usage stats ──
     if current_plan == "free":
+        from datetime import date
+        today_str = date.today().isoformat()
+        uhist_sb2 = get_user_history(uemail_global)
+        training_log_sb = uhist_sb2.get("training_log", [])
+        trained_today = sum(1 for t in training_log_sb if t.get("time","")[:10] == today_str)
+        total_trained = uhist_sb2.get("datasets_trained", 0)
+        daily_limit = 3
+        remaining = max(0, daily_limit - trained_today)
+        bar_pct = min(100, int((trained_today / daily_limit) * 100))
+        bar_color = ACCENT1 if trained_today == 0 else ACCENTY if trained_today < daily_limit else ACCENTR
+
         st.markdown(f"""
-        <div style="background:{"rgba(251,191,36,0.06)" if T=="dark" else "rgba(251,191,36,0.08)"};border:1px dashed {"rgba(251,191,36,0.35)" if T=="dark" else "rgba(251,191,36,0.45)"};border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem">
-        <div style="font-size:.72rem;font-weight:700;color:{ACCENTY}">⚡ Upgrade to unlock all features</div>
-        <div style="font-size:.65rem;color:{TEXT3};margin-top:.2rem">Pro from $19/mo</div>
-        </div>
-        <div style="background:{"rgba(255,255,255,0.03)" if T=="dark" else "rgba(0,0,0,0.03)"};border:1px solid {BORDER};border-radius:10px;padding:.75rem 1rem;margin-bottom:.75rem">
-        <div style="font-size:.62rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{TEXT3};margin-bottom:.5rem">🌱 Free Plan Limits</div>
-        <div style="display:flex;flex-direction:column;gap:.3rem">
-            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">📂 Datasets/day</span><span style="color:{ACCENTR};font-weight:700">3</span></div>
-            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">🤖 Algorithms</span><span style="color:{ACCENTR};font-weight:700">5 basic</span></div>
-            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">🔁 CV Folds</span><span style="color:{ACCENTR};font-weight:700">max 3</span></div>
-            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">📜 History</span><span style="color:{ACCENTR};font-weight:700">3 entries</span></div>
-            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">⚡ XGBoost</span><span style="color:{ACCENTR};font-weight:700">🔒 locked</span></div>
-            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">💾 Export .pkl</span><span style="color:{ACCENTR};font-weight:700">🔒 locked</span></div>
-        </div>
+        <div style="background:{"rgba(255,255,255,0.03)" if T=="dark" else "rgba(0,0,0,0.03)"};
+                    border:1px solid {BORDER};border-radius:12px;padding:.9rem 1rem;margin-bottom:.75rem">
+          <div style="font-size:.62rem;font-weight:800;text-transform:uppercase;
+                      letter-spacing:.08em;color:{TEXT3};margin-bottom:.65rem">📊 Usage Today</div>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem">
+            <span style="font-size:.72rem;color:{TEXT2}">📂 Datasets trained</span>
+            <span style="font-size:.82rem;font-weight:900;color:{bar_color};
+                         font-family:'JetBrains Mono',monospace">{trained_today}/{daily_limit}</span>
+          </div>
+          <div style="height:5px;background:{"#1c1c1c" if T=="dark" else "#e0e0e0"};
+                      border-radius:3px;margin-bottom:.65rem;overflow:hidden">
+            <div style="height:100%;width:{bar_pct}%;background:{bar_color};
+                        border-radius:3px;transition:width 0.4s ease"></div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;font-size:.72rem;
+                      margin-bottom:.3rem">
+            <span style="color:{TEXT2}">⏳ Remaining today</span>
+            <span style="font-weight:700;color:{'#4ade80' if remaining > 0 else '#f87171'}">{remaining} left</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:.72rem;
+                      margin-bottom:.3rem">
+            <span style="color:{TEXT2}">🏆 Total trained</span>
+            <span style="font-weight:700;color:{TEXT1}">{total_trained}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:.72rem">
+            <span style="color:{TEXT2}">🔁 CV Folds</span>
+            <span style="font-weight:700;color:{ACCENTR}">max 3</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:.72rem;margin-top:.3rem">
+            <span style="color:{TEXT2}">⚡ XGBoost</span>
+            <span style="font-weight:700;color:{ACCENTR}">🔒 Pro only</span>
+          </div>
+
+          {f'<div style="margin-top:.6rem;padding:.4rem .6rem;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.30);border-radius:8px;font-size:.7rem;font-weight:700;color:#f87171;text-align:center">⛔ Daily limit reached — resets at midnight</div>' if trained_today >= daily_limit else ""}
         </div>
         """, unsafe_allow_html=True)
 
@@ -1481,7 +1515,7 @@ if st.session_state.data is not None:
 
                 timeline_box.markdown(render_steps(0), unsafe_allow_html=True)
                 progress_bar.progress(5)
-                status_box.info("🚀 Training shuru ho rahi hai...")
+                status_box.info("🚀 Training is starting...")
 
                 try:
                     best, results, elapsed, warn_msgs, trained_rows = run_memory_safe_training(
