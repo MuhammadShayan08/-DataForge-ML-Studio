@@ -932,9 +932,9 @@ with st.sidebar:
         <div style="background:{"rgba(255,255,255,0.03)" if T=="dark" else "rgba(0,0,0,0.03)"};border:1px solid {BORDER};border-radius:10px;padding:.75rem 1rem;margin-bottom:.75rem">
         <div style="font-size:.62rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{TEXT3};margin-bottom:.5rem">🌱 Free Plan Limits</div>
         <div style="display:flex;flex-direction:column;gap:.3rem">
-            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">📂 Datasets/day</span><span style="color:{ACCENTR};font-weight:700">1</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">📂 Datasets/day</span><span style="color:{ACCENTR};font-weight:700">3</span></div>
             <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">🤖 Algorithms</span><span style="color:{ACCENTR};font-weight:700">5 basic</span></div>
-            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">🔁 CV Folds</span><span style="color:{ACCENTR};font-weight:700">max 1</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">🔁 CV Folds</span><span style="color:{ACCENTR};font-weight:700">max 3</span></div>
             <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">📜 History</span><span style="color:{ACCENTR};font-weight:700">3 entries</span></div>
             <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">⚡ XGBoost</span><span style="color:{ACCENTR};font-weight:700">🔒 locked</span></div>
             <div style="display:flex;justify-content:space-between;font-size:.72rem"><span style="color:{TEXT3}">💾 Export .pkl</span><span style="color:{ACCENTR};font-weight:700">🔒 locked</span></div>
@@ -1413,13 +1413,18 @@ if st.session_state.data is not None:
                     train_size = st.slider("Training Split", 0.5, 0.9, 0.8, 0.05)
                 with ac2:
                     recommended_fold = min(3, max_folds) if len(df) > MAX_ROWS_WARNING else min(5, max_folds)
+                    safe_max_folds = max(max_folds, 2)
+                    safe_min_folds = min(2, safe_max_folds)
+                    safe_default_fold = min(max(recommended_fold, safe_min_folds), safe_max_folds)
                     fold = st.slider(
-                        f"CV Folds (max {max_folds})", 2, max_folds, recommended_fold,
+                        f"CV Folds (max {safe_max_folds})", safe_min_folds, safe_max_folds, safe_default_fold,
                         help=f"Bade datasets pe {recommended_fold}-fold recommend (memory safe)"
                     )
                 with ac3:
-                    max_algo_slider = plan_limits["max_algorithms"]
-                    max_models = st.slider(f"Max Models", 3, max_algo_slider, min(8, max_algo_slider))
+                    max_algo_slider = max(plan_limits["max_algorithms"], 2)
+                    default_models = min(max(3, max_algo_slider), max_algo_slider)
+                    min_models = min(2, max_algo_slider)
+                    max_models = st.slider(f"Max Models", min_models, max_algo_slider, default_models)
                 ac4, ac5 = st.columns(2)
                 with ac4:
                     normalize = st.checkbox("Normalize Features", value=True)
