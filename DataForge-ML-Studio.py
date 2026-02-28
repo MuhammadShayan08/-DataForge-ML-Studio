@@ -1481,16 +1481,27 @@ if st.session_state.data is not None:
                 with ac1:
                     train_size = st.slider("Training Split", 0.5, 0.9, 0.8, 0.05)
                 with ac2:
-                    # ✅ FIX #1: CV Folds — use plan's max directly, no forced minimum of 3
-                    recommended_fold = min(3, max_folds) if len(df) > MAX_ROWS_WARNING else min(5, max_folds)
-                    safe_default_fold = max(min(recommended_fold, max_folds), min(2, max_folds))
-                    fold = st.slider(
-                        f"CV Folds (max {max_folds})",
-                        min_value=min(2, max_folds),
-                        max_value=max_folds,          # ✅ FIXED: no more max(max_folds, 3)
-                        value=safe_default_fold,
-                        help=f"Plan allows max {max_folds} folds. Bade datasets pe {recommended_fold}-fold recommend."
-                    )
+                    # ✅ FIX #1: CV Folds — plan-aware, crash-safe
+                    if max_folds <= 1:
+                        # Free plan: only 1 fold allowed — show info, no slider
+                        fold = 1
+                        st.markdown(
+                            f'<div style="padding:.55rem .9rem;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.30);border-radius:10px;font-size:.78rem;color:#f87171;font-weight:700">'
+                            f'🔒 CV Folds: 1 (Free plan)<br>'
+                            f'<span style="font-weight:400;color:{TEXT3}">Upgrade to Pro for up to 10-fold CV</span>'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        recommended_fold = min(3, max_folds) if len(df) > MAX_ROWS_WARNING else min(5, max_folds)
+                        safe_default_fold = max(min(recommended_fold, max_folds), 2)
+                        fold = st.slider(
+                            f"CV Folds (max {max_folds})",
+                            min_value=2,
+                            max_value=max_folds,
+                            value=safe_default_fold,
+                            help=f"Plan allows max {max_folds} folds. Bade datasets pe {recommended_fold}-fold recommend."
+                        )
                 with ac3:
                     # ✅ FIX #3: max_models slider properly bounded to plan limit
                     max_models_slider = st.slider(
