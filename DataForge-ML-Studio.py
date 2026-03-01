@@ -2452,7 +2452,7 @@ if st.session_state.data is not None:
                         )
                         if has_advanced:
                             # Show which pro features were actually used
-                            _pro_models_used = [m for m in include_models if m in ["xgboost","lightgbm","catboost"]]
+                            _pro_models_used = [m for m in available_models if m in ["xgboost","lightgbm","catboost"]]
                             _pro_chips = " &nbsp; ".join([f'<span style="background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.4);border-radius:6px;padding:.2rem .6rem;font-size:.72rem;font-weight:800">{m.title()} ✓ PRO</span>' for m in _pro_models_used])
                             st.markdown(f"""
                             <div style="background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);
