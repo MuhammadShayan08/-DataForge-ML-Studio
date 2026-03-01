@@ -12,10 +12,6 @@ I worked hard on the app, dedicating **1 hour daily**, but sometimes I even went
 
 I wake up at **9:00 AM** and sleep at **11:00 PM 🌙**, keeping a good routine to stay productive.
 
-## A Little Issue:
-
-While deploying the app on **Streamlit**, I encountered an error related to one feature 😕. This feature was related to **subscriptions**, but I have disabled it for now until I fix it. The rest of the app is working fine and ready to use!
-
 ## Gratitude and Motivation:
 
 I couldn’t have done it without the support and motivation from my **Baba** and **Sir Aammar**. They have helped me stay on track, even when I felt stuck 🛑. Their encouragement gave me the confidence to keep going.
