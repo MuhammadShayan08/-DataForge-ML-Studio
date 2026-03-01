@@ -1046,16 +1046,25 @@ if uemail_global and not is_admin:
     if _udata_check.get("plan_just_activated") and not is_admin:
         _activated_plan = _udata_check.get("plan","pro").upper()
         _expiry = _udata_check.get("plan_expiry","—")
-        st.balloons()
-        st.success(f"""
-🎉 **Welcome to {_activated_plan}!** Your plan is now active until **{_expiry}**.
-
-You now have access to:
-{"• Unlimited training sessions  • 34 algorithms (XGBoost, LightGBM, CatBoost)  • 10-fold CV  • Up to 5,000 rows" if _activated_plan == "PRO" else "• Everything in Pro  • Unlimited rows  • Custom pipelines"}
-        """)
-        # Clear the flag so banner only shows once
+        # Clear the flag FIRST, then rerun so current_plan refreshes with new plan
         _udb_check[uemail_global]["plan_just_activated"] = False
         save_json(USERS_FILE, _udb_check)
+        # Store banner info in session so it shows after rerun
+        st.session_state["show_activation_banner"] = {
+            "plan": _activated_plan, "expiry": _expiry
+        }
+        st.rerun()  # ← This makes current_plan reload with the new plan
+
+    # Show activation banner (after rerun)
+    if st.session_state.get("show_activation_banner"):
+        _b = st.session_state.pop("show_activation_banner")
+        st.balloons()
+        st.success(f"""
+🎉 **Welcome to {_b['plan']}!** Your plan is now active until **{_b['expiry']}**.
+
+You now have access to:
+{"• Unlimited training sessions  • 34 algorithms (XGBoost, LightGBM, CatBoost)  • 10-fold CV  • Up to 5,000 rows" if _b['plan'] == "PRO" else "• Everything in Pro  • Unlimited rows  • Custom pipelines"}
+        """)
 
 # ─────────────────────────────────────────────
 #  HEADER
@@ -2880,6 +2889,14 @@ We'll verify your payment within **2-24 hours** and activate your {selected_plan
         # ── PAYMENT HISTORY ──
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">📋</div><h3>My Payment History</h3></div>""", unsafe_allow_html=True)
         user_payments = get_user_payments(uemail_global)
+
+        # Auto-refresh if any payment is pending (check every 10 seconds)
+        _has_pending = any(p.get("status") == "pending" for p in user_payments)
+        if _has_pending:
+            st.info("⏳ **Payment pending approval...** This page will auto-refresh every 10 seconds.")
+            import time as _time
+            _time.sleep(10)
+            st.rerun()
         if not user_payments:
             st.markdown(f"""
             <div style="text-align:center;padding:2rem;background:{CARD_BG};border:1px solid {BORDER};border-radius:16px">
