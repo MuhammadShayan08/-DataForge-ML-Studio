@@ -1098,6 +1098,8 @@ PLAN_ICONS  = {"free": "🌱", "pro": "⚡", "enterprise": "🏢"}
 plan_color  = PLAN_COLORS.get(current_plan, "#6b7280")
 plan_icon   = PLAN_ICONS.get(current_plan, "🌱")
 is_admin    = uemail_global in ADMIN_EMAILS
+users_db_role = load_json(USERS_FILE)
+is_moderator = users_db_role.get(uemail_global, {}).get("role") == "moderator" and not is_admin
 
 # ─────────────────────────────────────────────
 #  ACCOUNT STATUS CHECKS (Freeze / Read-Only)
@@ -1210,13 +1212,16 @@ with st.sidebar:
     name_color   = "#9ca3af" if T == "dark" else "#888888"
 
     st.markdown(f"""
-    <div class="sidebar-section" style="text-align:center">
-      <div style="font-size:1.5rem;margin-bottom:.3rem">{plan_icon}</div>
-      <div style="font-size:.75rem;font-weight:700;color:{name_color};margin-bottom:.3rem">{uname_global}</div>
-      <span class="plan-badge {current_plan}">{plan_icon} {current_plan.upper()} Plan</span>
-        {expiry_html}{expired_html}
-    </div>
-    """, unsafe_allow_html=True)
+        <div class="sidebar-section" style="text-align:center">
+        <div style="font-size:1.5rem;margin-bottom:.3rem">{plan_icon}</div>
+        <div style="font-size:.75rem;font-weight:700;color:{name_color};margin-bottom:.3rem">{uname_global}</div>
+        <span class="plan-badge {current_plan}">{plan_icon} {current_plan.upper()} Plan</span>
+            {expiry_html}{expired_html}
+        </div>
+        """, unsafe_allow_html=True)
+
+    if is_moderator:
+        st.markdown(f'<div style="text-align:center;margin-top:.3rem"><span style="background:rgba(96,165,250,0.15);color:#60a5fa;border:1px solid rgba(96,165,250,0.4);border-radius:999px;padding:.2rem .75rem;font-size:.68rem;font-weight:800">🛡️ MODERATOR</span></div>', unsafe_allow_html=True)
 
     # ── Pro/Enterprise features list in sidebar ──
     if current_plan in ("pro", "enterprise"):
@@ -1758,6 +1763,25 @@ if is_admin:
                                 else:
                                     st.error("Min 6 characters required.")
 
+                            # Moderator role
+                            st.markdown("---")
+                            current_role = ud.get("role", "user")
+                            if current_role == "moderator":
+                                st.markdown(f'<div style="font-size:.75rem;color:#60a5fa;margin-bottom:.4rem">🛡️ Currently a Moderator</div>', unsafe_allow_html=True)
+                                if st.button("👤 Remove Moderator", key=f"adm_remove_mod_{em}"):
+                                    udb = load_json(USERS_FILE)
+                                    udb[em]["role"] = "user"
+                                    save_json(USERS_FILE, udb)
+                                    log_activity(em, "moderator_removed", "Moderator role removed by admin")
+                                    st.success("Role removed!"); st.rerun()
+                            else:
+                                if st.button("🛡️ Make Moderator", key=f"adm_make_mod_{em}"):
+                                    udb = load_json(USERS_FILE)
+                                    udb[em]["role"] = "moderator"
+                                    save_json(USERS_FILE, udb)
+                                    log_activity(em, "moderator_assigned", "Moderator role assigned by admin")
+                                    st.success("🛡️ Moderator assigned!"); st.rerun()
+                                            
                     # ── TAB 3: Freeze / Read-Only / Delete ──
                     with mt3:
                         is_frozen   = ud.get("frozen", False)
@@ -2043,6 +2067,73 @@ if is_admin:
                     st.markdown(h, unsafe_allow_html=True)
 
 st.markdown("---")
+
+if is_moderator:
+    with st.expander("🛡️ Moderator Panel", expanded=False):
+        all_payments_mod = load_json(PAYMENTS_FILE)
+        all_users_mod    = load_json(USERS_FILE)
+        pending_mod      = [p for p in all_payments_mod.values() if p.get("status") == "pending"]
+
+        st.markdown(f'<div style="background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.35);border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1rem;display:flex;align-items:center;gap:1rem"><span style="font-size:2rem">🛡️</span><div><div style="font-size:1.1rem;font-weight:900;color:#60a5fa">Moderator Panel</div><div style="font-size:.8rem;color:{TEXT2}">{uname_global} · Moderator Access</div></div></div>', unsafe_allow_html=True)
+
+        mod_tab1, mod_tab2 = st.tabs([
+            f"⏳ Pending Payments ({len(pending_mod)})",
+            f"👥 All Users ({len(all_users_mod)})"
+        ])
+
+        # ── TAB 1: Approve/Reject Payments ──
+        with mod_tab1:
+            if not pending_mod:
+                st.success("✨ No pending payments!")
+            for pay in sorted(pending_mod, key=lambda x: x.get("submitted_at",""), reverse=True):
+                pid = pay.get("id","")
+                plan_c = PRICING.get(pay.get("plan",""),{}).get("color", TEXT2)
+                st.markdown(f"""
+                <div style="background:{CARD_BG};border:2px solid rgba(251,191,36,0.35);border-radius:16px;padding:1.25rem;margin-bottom:.75rem">
+                  <div style="font-weight:800;color:{TEXT1}">{pay.get("name","?")} — {pay.get("email","?")}</div>
+                  <div style="font-size:.8rem;color:{TEXT2};margin:.3rem 0">
+                    Plan: <b style="color:{plan_c}">{pay.get("plan","?").upper()}</b> ·
+                    Amount: <b style="color:#fbbf24">PKR {pay.get("amount",0):,.0f}</b> ·
+                    Method: {pay.get("payment_method","?").replace("_"," ").title()}
+                  </div>
+                  <div style="font-size:.72rem;color:{TEXT3}">Txn: {pay.get("txn_id","?")} · {pay.get("submitted_at","")[:16]} · {pid}</div>
+                </div>""", unsafe_allow_html=True)
+                mc1, mc2 = st.columns(2)
+                with mc1:
+                    if st.button("✅ Approve", key=f"mod_approve_{pid}"):
+                        if approve_payment(pid):
+                            log_activity(pay.get("email",""), "plan_approved", f"{pay.get('plan','')} approved by moderator")
+                            st.success(f"✅ Approved!"); st.rerun()
+                with mc2:
+                    if st.button("❌ Reject", key=f"mod_reject_{pid}"):
+                        pays_rj = load_json(PAYMENTS_FILE)
+                        if pid in pays_rj:
+                            pays_rj[pid]["status"] = "rejected"
+                            pays_rj[pid]["processed_at"] = now_str()
+                            save_json(PAYMENTS_FILE, pays_rj)
+                            log_activity(pay.get("email",""), "plan_rejected", "rejected by moderator")
+                            st.warning("❌ Rejected."); st.rerun()
+                st.markdown("---")
+
+        # ── TAB 2: View Users (read-only) ──
+        with mod_tab2:
+            mod_search = st.text_input("🔍 Search", key="mod_search", placeholder="Name or email...")
+            for em, ud in sorted(all_users_mod.items(), key=lambda x: x[1].get("signup_date",""), reverse=True):
+                if mod_search and mod_search.lower() not in em.lower() and mod_search.lower() not in ud.get("name","").lower():
+                    continue
+                u_plan = get_user_plan(em)
+                u_pc   = PLAN_COLORS.get(u_plan, "#6b7280")
+                online_st = get_online_status(ud)
+                st.markdown(f"""
+                <div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:12px;padding:.9rem 1.25rem;margin-bottom:.4rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+                  <div style="flex:1;min-width:180px">
+                    <div style="font-weight:700;color:{TEXT1}">{ud.get("name","?")}</div>
+                    <div style="font-size:.72rem;color:{TEXT3}">{em}</div>
+                  </div>
+                  <span style="font-size:.75rem;font-weight:800;color:{u_pc}">{u_plan.upper()}</span>
+                  <span style="font-size:.75rem;color:{online_st['color']}">{online_st['dot']} {online_st['label']}</span>
+                  <div style="font-size:.68rem;color:{TEXT3}">Joined: {ud.get("signup_date","—")[:10]}</div>
+                </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  MAIN TABS
