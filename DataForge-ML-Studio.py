@@ -351,6 +351,41 @@ def hash_password(pw):
 def now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+def update_last_seen(email: str):
+    """Update user's last_seen timestamp — called on every page load."""
+    try:
+        udb = load_json(USERS_FILE)
+        if email in udb:
+            udb[email]["last_seen"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            save_json(USERS_FILE, udb)
+    except Exception:
+        pass
+
+def get_online_status(ud: dict) -> dict:
+    """Returns online status based on last_seen timestamp."""
+    last_seen = ud.get("last_seen", "")
+    if not last_seen:
+        return {"dot": "⚫", "color": "#6b7280", "label": "Never", "online": False}
+    try:
+        ls_dt = datetime.strptime(last_seen, "%Y-%m-%d %H:%M:%S")
+        diff  = datetime.now() - ls_dt
+        mins  = int(diff.total_seconds() / 60)
+        if mins <= 5:
+            return {"dot": "🟢", "color": "#4ade80", "label": "Online now", "online": True}
+        elif mins <= 30:
+            return {"dot": "🟡", "color": "#fbbf24", "label": f"{mins}m ago", "online": False}
+        elif mins <= 60:
+            return {"dot": "🔴", "color": "#f87171", "label": f"{mins}m ago", "online": False}
+        elif diff.days == 0:
+            hrs = int(mins / 60)
+            return {"dot": "⚫", "color": "#6b7280", "label": f"{hrs}h ago", "online": False}
+        elif diff.days == 1:
+            return {"dot": "⚫", "color": "#6b7280", "label": "Yesterday", "online": False}
+        else:
+            return {"dot": "⚫", "color": "#6b7280", "label": f"{diff.days}d ago", "online": False}
+    except Exception:
+        return {"dot": "⚫", "color": "#6b7280", "label": "Unknown", "online": False}
+
 # ─────────────────────────────────────────────
 #  PLAN LIMITS
 # ─────────────────────────────────────────────
@@ -461,7 +496,7 @@ try:
     SMTP_PASS = st.secrets["SMTP_PASS"]
 except Exception:
     SMTP_USER = "shayan.code1@gmail.com"
-    SMTP_PASS = "kiuabeuhkmwfpjie"
+    SMTP_PASS = "exqmfantkdibaszv"
 
 def send_email(subject: str, body: str):
     if not SMTP_USER or not SMTP_PASS:
@@ -963,6 +998,54 @@ plan_icon   = PLAN_ICONS.get(current_plan, "🌱")
 is_admin    = uemail_global in ADMIN_EMAILS
 
 # ─────────────────────────────────────────────
+#  ACCOUNT STATUS CHECKS (Freeze / Read-Only)
+# ─────────────────────────────────────────────
+def get_account_status(email: str) -> dict:
+    """Returns current account restriction status."""
+    users_db = load_json(USERS_FILE)
+    ud = users_db.get(email, {})
+    return {
+        "frozen":    ud.get("frozen", False),
+        "readonly":  ud.get("readonly", False),
+        "frozen_at": ud.get("frozen_at", ""),
+        "frozen_reason": ud.get("frozen_reason", ""),
+    }
+
+# Log every page activity for monitoring
+if uemail_global and not is_admin:
+    try:
+        _status = get_account_status(uemail_global)
+        # ── FROZEN: total block ──
+        if _status["frozen"]:
+            st.markdown(f"""
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                        min-height:80vh;text-align:center;padding:3rem">
+              <div style="font-size:5rem;margin-bottom:1rem">🧊</div>
+              <div style="font-size:1.8rem;font-weight:900;color:#60a5fa;margin-bottom:.5rem">Account Frozen</div>
+              <div style="font-size:1rem;color:#9ca3af;max-width:400px;line-height:1.7">
+                Your account has been temporarily frozen by admin.<br>
+                <b style="color:#f9fafb">Reason:</b> {_status['frozen_reason'] or 'Administrative action'}<br>
+                <b style="color:#f9fafb">Frozen at:</b> {_status['frozen_at'][:16]}<br><br>
+                Please contact support to resolve this issue.
+              </div>
+            </div>""", unsafe_allow_html=True)
+            st.stop()
+        # ── READ-ONLY: allow login, block actions ──
+        is_readonly = _status["readonly"]
+        if is_readonly:
+            st.warning("👁️ **Read-Only Mode** — Your account is currently in read-only mode. You can view but cannot perform any actions. Contact support for assistance.")
+        else:
+            is_readonly = False
+    except Exception:
+        is_readonly = False
+else:
+    is_readonly = False
+
+# ── Update last_seen on every page load ──
+if uemail_global and not is_admin:
+    update_last_seen(uemail_global)
+
+# ─────────────────────────────────────────────
 #  HEADER
 # ─────────────────────────────────────────────
 st.markdown(f"""
@@ -1203,10 +1286,12 @@ if is_admin:
         ]:
             with col: st.metric(lbl, val, sub)
 
-        adm1, adm2, adm3, adm4 = st.tabs([
+        adm1, adm2, adm3, adm4, adm5 = st.tabs([
             f"⏳ Pending ({len(pending_pays)})",
             f"✅ Approved ({len(approved_pays)})",
-            f"👥 All Users ({len(all_users_db)})", "📧 Email Log"
+            f"👥 All Users ({len(all_users_db)})",
+            "📊 Activity Monitor",
+            "📧 Email Log"
         ])
 
         with adm1:
@@ -1312,6 +1397,7 @@ if is_admin:
                 admin_note   = ud.get("admin_note","")
                 suspend_until= ud.get("suspended_until","")
                 user_payments_list = [p for p in all_payments.values() if p.get("email")==em]
+                online_st    = get_online_status(ud)
 
                 # Status badges
                 status_badges = ""
@@ -1320,13 +1406,18 @@ if is_admin:
                 if is_deactivated: status_badges += f'<span style="background:rgba(107,114,128,0.15);color:#9ca3af;border:1px solid rgba(107,114,128,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">🔴 INACTIVE</span>'
                 if is_verified:    status_badges += f'<span style="background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.35);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">✔️ VERIFIED</span>'
                 if id_required:    status_badges += f'<span style="background:rgba(192,132,252,0.12);color:#c084fc;border:1px solid rgba(192,132,252,0.35);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">🪪 ID NEEDED</span>'
+                if ud.get("frozen"):   status_badges += f'<span style="background:rgba(96,165,250,0.15);color:#60a5fa;border:1px solid rgba(96,165,250,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">🧊 FROZEN</span>'
+                if ud.get("readonly"): status_badges += f'<span style="background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">👁️ READ-ONLY</span>'
 
-                row_border = "#f87171" if is_banned else ("#fbbf24" if is_suspended else BORDER)
+                row_border = "#f87171" if is_banned else ("#60a5fa" if ud.get("frozen") else ("#fbbf24" if is_suspended else BORDER))
 
                 h  = f'<div style="background:{CARD_BG};border:1px solid {row_border};border-radius:14px;padding:1rem 1.25rem;margin-bottom:.5rem;position:relative;overflow:hidden">'
                 h += f'<div style="position:absolute;top:0;left:0;bottom:0;width:3px;background:{u_pc}"></div>'
                 h += f'<div style="display:flex;align-items:center;gap:.9rem;flex-wrap:wrap;margin-left:.3rem">'
-                h += f'<div style="width:38px;height:38px;border-radius:50%;background:{u_pc}20;border:2px solid {u_pc}60;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">{u_pi}</div>'
+                h += f'<div style="position:relative;width:38px;height:38px;flex-shrink:0">'
+                h += f'<div style="width:38px;height:38px;border-radius:50%;background:{u_pc}20;border:2px solid {u_pc}60;display:flex;align-items:center;justify-content:center;font-size:1.1rem">{u_pi}</div>'
+                h += f'<div style="position:absolute;bottom:0;right:0;width:11px;height:11px;border-radius:50%;background:{online_st["color"]};border:2px solid {CARD_BG}"></div>'
+                h += f'</div>'
                 h += f'<div style="flex:1;min-width:180px">'
                 h += f'<div style="font-size:.92rem;font-weight:800;color:{TEXT1}">{ud.get("name","?")} {status_badges}</div>'
                 h += f'<div style="font-size:.72rem;color:{TEXT3};margin-top:.1rem">{em}</div>'
@@ -1335,15 +1426,16 @@ if is_admin:
                 h += f'<div style="text-align:center"><div style="font-size:.85rem;font-weight:900;color:{u_pc}">{u_plan.upper()}</div><div style="font-size:.58rem;color:{TEXT3}">plan</div></div>'
                 h += f'<div style="text-align:center"><div style="font-size:.85rem;font-weight:900;color:#60a5fa">{login_count}</div><div style="font-size:.58rem;color:{TEXT3}">logins</div></div>'
                 h += f'<div style="text-align:center"><div style="font-size:.85rem;font-weight:900;color:{ACCENTY}">{len(user_payments_list)}</div><div style="font-size:.58rem;color:{TEXT3}">payments</div></div>'
+                h += f'<div style="text-align:center"><div style="font-size:.82rem;font-weight:800;color:{online_st["color"]}">{online_st["dot"]} {online_st["label"]}</div><div style="font-size:.58rem;color:{TEXT3}">last seen</div></div>'
                 h += f'<div style="text-align:right"><div style="font-size:.68rem;color:{TEXT3}">📅 Joined: {join_date}</div>'
-                h += f'<div style="font-size:.68rem;color:{TEXT3}">🕐 Last: {str(last_login)[:16]}</div>'
+                h += f'<div style="font-size:.68rem;color:{TEXT3}">🕐 Last login: {str(last_login)[:16]}</div>'
                 h += f'</div></div></div>'
                 st.markdown(h, unsafe_allow_html=True)
 
                 with st.expander(f"⚙️ Manage — {ud.get('name','?')} ({em})", expanded=False):
 
                     # ── TABS inside manage panel ──
-                    mt1, mt2, mt3, mt4, mt5 = st.tabs(["📋 Profile", "🔐 Account", "📧 Message", "📜 History", "💳 Payments"])
+                    mt1, mt2, mt3, mt4, mt5, mt6 = st.tabs(["📋 Profile", "🔐 Account", "🧊 Freeze/Delete", "📧 Message", "📜 Activity", "💳 Payments"])
 
                     # ── TAB 1: Profile + Plan ──
                     with mt1:
@@ -1494,8 +1586,95 @@ if is_admin:
                                 else:
                                     st.error("Min 6 characters required.")
 
-                    # ── TAB 3: Send Email ──
+                    # ── TAB 3: Freeze / Read-Only / Delete ──
                     with mt3:
+                        is_frozen   = ud.get("frozen", False)
+                        is_readonly_u = ud.get("readonly", False)
+
+                        fr_c1, fr_c2, fr_c3 = st.columns(3)
+
+                        with fr_c1:
+                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:#60a5fa;margin-bottom:.5rem">🧊 Freeze Account</div>', unsafe_allow_html=True)
+                            st.caption("Instant block — user sees frozen screen, cannot do anything.")
+                            if is_frozen:
+                                st.markdown(f'<div style="background:rgba(96,165,250,0.10);border:1px solid rgba(96,165,250,0.35);border-radius:8px;padding:.6rem .9rem;font-size:.75rem;color:#60a5fa;margin-bottom:.5rem">🧊 Frozen since: {ud.get("frozen_at","—")[:16]}<br>Reason: {ud.get("frozen_reason","—")}</div>', unsafe_allow_html=True)
+                                if st.button("🔓 Unfreeze Account", key=f"adm_unfreeze_{em}"):
+                                    udb = load_json(USERS_FILE)
+                                    udb[em]["frozen"] = False
+                                    udb[em]["frozen_at"] = ""
+                                    udb[em]["frozen_reason"] = ""
+                                    save_json(USERS_FILE, udb)
+                                    log_activity(em, "unfrozen", "Account unfrozen by admin")
+                                    st.success("✅ Account unfrozen!"); st.rerun()
+                            else:
+                                freeze_reason = st.text_input("Freeze reason", key=f"adm_freeze_reason_{em}", placeholder="e.g. Suspicious activity")
+                                if st.button("🧊 Freeze Instantly", key=f"adm_freeze_{em}", type="primary"):
+                                    udb = load_json(USERS_FILE)
+                                    udb[em]["frozen"] = True
+                                    udb[em]["frozen_at"] = now_str()
+                                    udb[em]["frozen_reason"] = freeze_reason
+                                    save_json(USERS_FILE, udb)
+                                    # Invalidate all tokens
+                                    tks = load_json(TOKENS_FILE)
+                                    tks = {t:v for t,v in tks.items() if v.get("email") != em}
+                                    save_json(TOKENS_FILE, tks)
+                                    log_activity(em, "frozen", f"Frozen: {freeze_reason}")
+                                    st.info("🧊 Account frozen instantly!"); st.rerun()
+
+                        with fr_c2:
+                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{ACCENTY};margin-bottom:.5rem">👁️ Read-Only Mode</div>', unsafe_allow_html=True)
+                            st.caption("User can login and view but cannot train, upload, or take any action.")
+                            if is_readonly_u:
+                                st.markdown(f'<div style="background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.35);border-radius:8px;padding:.6rem .9rem;font-size:.75rem;color:{ACCENTY};margin-bottom:.5rem">👁️ Currently in Read-Only mode</div>', unsafe_allow_html=True)
+                                if st.button("✅ Restore Full Access", key=f"adm_readonly_off_{em}"):
+                                    udb = load_json(USERS_FILE)
+                                    udb[em]["readonly"] = False
+                                    save_json(USERS_FILE, udb)
+                                    log_activity(em, "readonly_removed", "Full access restored by admin")
+                                    st.success("✅ Full access restored!"); st.rerun()
+                            else:
+                                ro_reason = st.text_input("Reason (optional)", key=f"adm_ro_reason_{em}", placeholder="e.g. Payment pending")
+                                if st.button("👁️ Set Read-Only", key=f"adm_readonly_on_{em}"):
+                                    udb = load_json(USERS_FILE)
+                                    udb[em]["readonly"] = True
+                                    udb[em]["readonly_reason"] = ro_reason
+                                    udb[em]["readonly_at"] = now_str()
+                                    save_json(USERS_FILE, udb)
+                                    log_activity(em, "readonly_set", f"Read-only: {ro_reason}")
+                                    st.warning("👁️ User set to read-only!"); st.rerun()
+
+                        with fr_c3:
+                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{ACCENTR};margin-bottom:.5rem">🗑️ Delete Account</div>', unsafe_allow_html=True)
+                            st.caption("⚠️ Permanent! All data, history, and payments will be deleted forever.")
+                            confirm_del = st.text_input("Type email to confirm", key=f"adm_del_confirm_{em}", placeholder=f"{em}")
+                            if st.button("🗑️ DELETE PERMANENTLY", key=f"adm_delete_{em}"):
+                                if confirm_del.strip() == em:
+                                    # Delete from all collections
+                                    udb = load_json(USERS_FILE)
+                                    udb.pop(em, None)
+                                    save_json(USERS_FILE, udb)
+
+                                    hdb = load_json(HISTORY_FILE)
+                                    hdb.pop(em, None)
+                                    save_json(HISTORY_FILE, hdb)
+
+                                    # Delete tokens
+                                    tks = load_json(TOKENS_FILE)
+                                    tks = {t:v for t,v in tks.items() if v.get("email") != em}
+                                    save_json(TOKENS_FILE, tks)
+
+                                    # Delete payments
+                                    pays = load_json(PAYMENTS_FILE)
+                                    pays = {k:v for k,v in pays.items() if v.get("email") != em}
+                                    save_json(PAYMENTS_FILE, pays)
+
+                                    st.error(f"🗑️ Account {em} permanently deleted!")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Email doesn't match — not deleted.")
+
+                    # ── TAB 4: Send Email ──
+                    with mt4:
                         st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin-bottom:.75rem">Send a direct message to <b>{ud.get("name","?")}</b> at <b>{em}</b></div>', unsafe_allow_html=True)
                         msg_subject = st.text_input("Subject", key=f"adm_msg_subj_{em}", placeholder="e.g. Account Notice")
                         msg_body    = st.text_area("Message", key=f"adm_msg_body_{em}", height=150, placeholder="Type your message here...")
@@ -1540,8 +1719,8 @@ if is_admin:
                             else:
                                 st.error("Subject aur message dono required hain.")
 
-                    # ── TAB 4: Login + Activity History ──
-                    with mt4:
+                    # ── TAB 5: Login + Activity History ──
+                    with mt5:
                         activity_log  = u_hist.get("activity_log", [])
                         training_log  = u_hist.get("training_log", [])
 
@@ -1574,8 +1753,8 @@ if is_admin:
                                 log_activity(em, "history_cleared", "Training history cleared by admin")
                                 st.success("Training history cleared!"); st.rerun()
 
-                    # ── TAB 5: Payment Attempts ──
-                    with mt5:
+                    # ── TAB 6: Payment Attempts ──
+                    with mt6:
                         all_user_pays = sorted(user_payments_list, key=lambda x: x.get("submitted_at",""), reverse=True)
                         if not all_user_pays:
                             st.info("No payment attempts from this user.")
@@ -1595,6 +1774,68 @@ if is_admin:
                                 st.markdown(h5, unsafe_allow_html=True)
 
         with adm4:
+            st.markdown(f'<div style="font-size:1rem;font-weight:800;color:{TEXT1};margin-bottom:1rem">📊 Live Activity Monitor</div>', unsafe_allow_html=True)
+
+            # ── Summary Stats ──
+            all_activity = []
+            for em_a, hist_a in all_history.items():
+                for ev in hist_a.get("activity_log", []):
+                    all_activity.append({**ev, "email": em_a, "name": all_users_db.get(em_a, {}).get("name","?")})
+            all_activity = sorted(all_activity, key=lambda x: x.get("time",""), reverse=True)
+
+            # Stats
+            _today_acts = [a for a in all_activity if a.get("time","")[:10] == _today_str]
+            _logins_today = sum(1 for a in _today_acts if a.get("action") == "signin")
+            _signups_today = sum(1 for a in _today_acts if a.get("action") == "signup")
+            _trainings_today = sum(1 for a in _today_acts if a.get("action") == "training_complete")
+            _frozen_count = sum(1 for ud in all_users_db.values() if ud.get("frozen"))
+            _readonly_count = sum(1 for ud in all_users_db.values() if ud.get("readonly"))
+            _online_count = sum(1 for ud in all_users_db.values() if get_online_status(ud)["online"])
+
+            am1,am2,am3,am4,am5,am6,am7 = st.columns(7)
+            for col,lbl,val,color in [
+                (am1,"🟢 Online Now",_online_count,"#4ade80"),
+                (am2,"🔑 Logins Today",_logins_today,"#60a5fa"),
+                (am3,"✨ Signups Today",_signups_today,"#4ade80"),
+                (am4,"🤖 Trainings Today",_trainings_today,"#c084fc"),
+                (am5,"🧊 Frozen",_frozen_count,"#60a5fa"),
+                (am6,"👁️ Read-Only",_readonly_count,"#fbbf24"),
+                (am7,"📋 Total Events",len(all_activity),"#9ca3af"),
+            ]:
+                with col:
+                    st.markdown(f'<div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:12px;padding:.75rem 1rem;text-align:center"><div style="font-size:.65rem;color:{TEXT3};text-transform:uppercase;font-weight:700">{lbl}</div><div style="font-size:1.6rem;font-weight:900;color:{color}">{val}</div></div>', unsafe_allow_html=True)
+
+            st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+            # ── Frozen/ReadOnly users quick list ──
+            frozen_users = [(em, ud) for em, ud in all_users_db.items() if ud.get("frozen") or ud.get("readonly")]
+            if frozen_users:
+                st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">⚠️ Restricted Accounts</div>', unsafe_allow_html=True)
+                for em_f, ud_f in frozen_users:
+                    status_f = "🧊 FROZEN" if ud_f.get("frozen") else "👁️ READ-ONLY"
+                    color_f  = "#60a5fa" if ud_f.get("frozen") else "#fbbf24"
+                    st.markdown(f'<div style="background:{CARD_BG};border:1px solid {color_f}44;border-radius:10px;padding:.6rem 1rem;margin-bottom:.3rem;display:flex;justify-content:space-between;align-items:center"><div><b style="color:{TEXT1}">{ud_f.get("name","?")} </b><span style="font-size:.72rem;color:{TEXT3}">{em_f}</span></div><span style="font-size:.72rem;font-weight:800;color:{color_f}">{status_f}</span></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+            # ── Live Activity Feed ──
+            am_search = st.text_input("🔍 Filter by email or action", key="am_search", placeholder="e.g. training, signin...")
+            st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin:.5rem 0">📋 Recent Activity (last 100)</div>', unsafe_allow_html=True)
+
+            shown = 0
+            for ev in all_activity[:200]:
+                if am_search and am_search.lower() not in ev.get("email","").lower() and am_search.lower() not in ev.get("action","").lower():
+                    continue
+                action = ev.get("action","")
+                a_color = "#4ade80" if action in ["signup","plan_approved","verified"] else \
+                          "#f87171" if action in ["banned","frozen","deleted","plan_rejected"] else \
+                          "#fbbf24" if action in ["suspended","readonly_set"] else \
+                          "#60a5fa" if action == "signin" else \
+                          "#c084fc" if action == "training_complete" else TEXT3
+                st.markdown(f'<div style="display:flex;gap:.75rem;align-items:center;padding:.3rem 0;border-bottom:1px solid {BORDER}"><span style="font-size:.68rem;color:{TEXT3};min-width:110px">{ev.get("time","")[:16]}</span><span style="font-size:.72rem;font-weight:700;color:{a_color};min-width:130px">{action}</span><span style="font-size:.72rem;color:{TEXT2};min-width:160px">{ev.get("name","?")} ({ev.get("email","")[:20]})</span><span style="font-size:.7rem;color:{TEXT3}">{ev.get("detail","")[:50]}</span></div>', unsafe_allow_html=True)
+                shown += 1
+                if shown >= 100: break
+
+        with adm5:
             email_log = load_json("dataforge_email_log")
             if not email_log:
                 st.info("No email events logged yet.")
@@ -1898,17 +2139,20 @@ if st.session_state.data is not None:
             st.markdown("<br>", unsafe_allow_html=True)
             col_btn1, col_btn2 = st.columns([3, 1])
             with col_btn1:
-                train_clicked = st.button("🚀 Launch Training", key="train_btn")
+                train_clicked = st.button("🚀 Launch Training", key="train_btn", disabled=is_readonly)
             with col_btn2:
                 if st.session_state.results is not None:
-                    if st.button("🔄 Reset Results", key="reset_btn"):
+                    if st.button("🔄 Reset Results", key="reset_btn", disabled=is_readonly):
                         st.session_state.results = None
                         st.session_state.best_model = None
                         st.session_state.training_time = None
                         force_gc()
                         st.rerun()
 
-            if train_clicked:
+            if is_readonly:
+                st.info("👁️ Read-only mode — training disabled.")
+
+            if train_clicked and not is_readonly:
                 can_go, block_msg = can_train(uemail_global)
                 if not can_go:
                     st.error(block_msg)
