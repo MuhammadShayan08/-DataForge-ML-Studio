@@ -370,7 +370,7 @@ def get_online_status(ud: dict) -> dict:
         ls_dt = datetime.strptime(last_seen, "%Y-%m-%d %H:%M:%S")
         diff  = datetime.now() - ls_dt
         mins  = int(diff.total_seconds() / 60)
-        if mins <= 5:
+        if mins <= 0 and diff.total_seconds() <= 30:
             return {"dot": "🟢", "color": "#4ade80", "label": "Online now", "online": True}
         elif mins <= 30:
             return {"dot": "🟡", "color": "#fbbf24", "label": f"{mins}m ago", "online": False}
