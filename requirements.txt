@@ -9,3 +9,5 @@ catboost
 scikit-learn
 psutil
 openpyxl
+pymongo[srv]
+certifi
