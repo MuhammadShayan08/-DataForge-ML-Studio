@@ -2218,10 +2218,6 @@ if st.session_state.data is not None:
     with tab3:
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">⚙️</div><h3>Training Configuration</h3></div>""", unsafe_allow_html=True)
 
-        mem_now = get_memory_usage_mb()
-        if mem_now > 350:
-            st.warning(f"⚠️ **High Memory ({mem_now:.0f}MB/512MB)**")
-
         tc1, tc2 = st.columns([3, 1])
         with tc1:
             target_col = st.selectbox("🎯 Select Target Column", df.columns.tolist())
