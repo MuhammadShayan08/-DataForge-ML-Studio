@@ -1228,7 +1228,7 @@ with st.sidebar:
 
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sidebar-title">🎯 Sample Datasets</div>', unsafe_allow_html=True)
-    sample = st.selectbox("Pick one", ["— choose —","🚢 Titanic","💎 Diamonds","🌸 Iris"], label_visibility="collapsed")
+    sample = st.selectbox("Pick one", ["— choose —","🚢 Titanic","💎 Diamonds","🌸 Iris"], label_visibility="collapsed", key="sample_dataset_select", index=0)
     if sample != "— choose —":
         if st.button("Load Sample →", key="load_sample"):
             try:
