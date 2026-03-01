@@ -772,11 +772,31 @@ if "upgrade_plan_selected" not in st.session_state:
     st.session_state.upgrade_plan_selected = None
 
 # ── No login required — app is always open ──
-# Admin access is PIN-protected only (set ADMIN_PIN in Streamlit secrets)
+# Each browser session gets a unique persistent ID (stored in session_state)
+# This means each visitor has their own plan/history record in MongoDB
 st.session_state.authenticated = True
 if "current_user" not in st.session_state:
-    st.session_state.current_user = {"name": "User", "email": "guest@dataforge.app"}
-st.session_state.login_token   = None
+    # Generate a unique ID for this browser session
+    _uid = secrets.token_hex(8)  # e.g. "a3f9c12b4e7d8901"
+    st.session_state.current_user = {
+        "name": f"User",
+        "email": f"user_{_uid}@dataforge.app"
+    }
+    # Create a minimal record in DB for this user
+    try:
+        _udb = load_json(USERS_FILE)
+        _email_new = st.session_state.current_user["email"]
+        if _email_new not in _udb:
+            _udb[_email_new] = {
+                "name": "User",
+                "email": _email_new,
+                "plan": "free",
+                "signup_date": now_str(),
+            }
+            save_json(USERS_FILE, _udb)
+    except Exception:
+        pass
+st.session_state.login_token = None
 
 # ── Admin PIN session state ──
 if "admin_unlocked" not in st.session_state:
