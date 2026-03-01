@@ -30,7 +30,15 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 import certifi
 
-ADMIN_EMAILS = {"shayan.code1@gmail.com"}
+# ── Admin PIN — loaded from Streamlit secrets only ──
+def _get_admin_pin() -> str:
+    """Get admin PIN from st.secrets. Never hardcode in source code."""
+    try:
+        return str(st.secrets.get("ADMIN_PIN", "")).strip()
+    except Exception:
+        return os.environ.get("ADMIN_PIN", "").strip()
+
+ADMIN_PIN = _get_admin_pin()
 
 @st.cache_resource
 def get_db():
@@ -764,9 +772,17 @@ if "upgrade_plan_selected" not in st.session_state:
     st.session_state.upgrade_plan_selected = None
 
 # ── No login required — app is always open ──
+# Admin access is PIN-protected only (set ADMIN_PIN in Streamlit secrets)
 st.session_state.authenticated = True
-st.session_state.current_user  = {"name": "Admin", "email": "shayan.code1@gmail.com"}
+if "current_user" not in st.session_state:
+    st.session_state.current_user = {"name": "User", "email": "guest@dataforge.app"}
 st.session_state.login_token   = None
+
+# ── Admin PIN session state ──
+if "admin_unlocked" not in st.session_state:
+    st.session_state["admin_unlocked"] = False
+if "admin_pin_attempts" not in st.session_state:
+    st.session_state["admin_pin_attempts"] = 0
 
 T = st.session_state.theme
 
@@ -952,7 +968,9 @@ PLAN_COLORS = {"free": "#6b7280", "pro": "#4ade80", "enterprise": "#c084fc"}
 PLAN_ICONS  = {"free": "🌱", "pro": "⚡", "enterprise": "🏢"}
 plan_color  = PLAN_COLORS.get(current_plan, "#6b7280")
 plan_icon   = PLAN_ICONS.get(current_plan, "🌱")
-is_admin    = uemail_global in ADMIN_EMAILS
+is_admin    = st.session_state.get("admin_unlocked", False)
+users_db_role = load_json(USERS_FILE)
+is_moderator = False
 
 # ─────────────────────────────────────────────
 #  ACCOUNT STATUS CHECKS (Freeze / Read-Only)
@@ -1062,6 +1080,9 @@ with st.sidebar:
         {expiry_html}{expired_html}
     </div>
     """, unsafe_allow_html=True)
+
+    if is_moderator:
+        st.markdown(f'<div style="text-align:center;margin-top:.3rem"><span style="background:rgba(96,165,250,0.15);color:#60a5fa;border:1px solid rgba(96,165,250,0.4);border-radius:999px;padding:.2rem .75rem;font-size:.68rem;font-weight:800">🛡️ MODERATOR</span></div>', unsafe_allow_html=True)
 
     # ── Pro/Enterprise features list in sidebar ──
     if current_plan in ("pro", "enterprise"):
@@ -1254,631 +1275,761 @@ def plan_gate(feature_key: str, upgrade_msg: str = None):
     return False
 
 # ─────────────────────────────────────────────
-#  ADMIN PANEL
+#  ADMIN PANEL — PIN Protected
 # ─────────────────────────────────────────────
-if is_admin:
-    with st.expander("🔐 Admin Panel", expanded=False):
-        all_payments  = load_json(PAYMENTS_FILE)
-        all_users_db  = load_json(USERS_FILE)
-        all_history   = load_json(HISTORY_FILE)
+with st.expander("🔐 Admin", expanded=False):
+    if not st.session_state.get("admin_unlocked", False):
+        # ── PIN Login Screen ──
+        st.markdown(f"""
+        <div style="text-align:center;padding:1.5rem 1rem">
+          <div style="font-size:3rem;margin-bottom:.5rem">🔐</div>
+          <div style="font-size:1rem;font-weight:800;color:{TEXT1}">Admin Access</div>
+          <div style="font-size:.8rem;color:{TEXT3};margin-top:.25rem">Enter your secret PIN to continue</div>
+        </div>""", unsafe_allow_html=True)
 
-        pending_pays  = [p for p in all_payments.values() if p.get("status")=="pending"]
-        approved_pays = [p for p in all_payments.values() if p.get("status")=="approved"]
-        rejected_pays = [p for p in all_payments.values() if p.get("status")=="rejected"]
-        total_revenue = sum(p.get("amount",0) for p in approved_pays)
+        _attempts = st.session_state.get("admin_pin_attempts", 0)
 
-        st.markdown(f'<div style="background:linear-gradient(135deg,rgba(192,132,252,0.10),rgba(96,165,250,0.08));border:1px solid rgba(192,132,252,0.35);border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1rem;display:flex;align-items:center;gap:1rem"><span style="font-size:2rem">🔐</span><div><div style="font-size:1.1rem;font-weight:900;color:#c084fc">Admin Control Panel</div><div style="font-size:.8rem;color:{TEXT2}">{uname_global} ({uemail_global}) · Admin Access</div></div></div>', unsafe_allow_html=True)
+        if _attempts >= 5:
+            st.error("🚫 Too many wrong attempts. Restart the app to try again.")
+        else:
+            _pin_input = st.text_input(
+                "Admin PIN", type="password",
+                placeholder="Enter PIN...",
+                key="admin_pin_field",
+                label_visibility="collapsed"
+            )
+            _pin_col1, _pin_col2 = st.columns([1, 1])
+            with _pin_col1:
+                if st.button("🔓 Unlock", key="admin_unlock_btn", use_container_width=True):
+                    if not ADMIN_PIN:
+                        st.error("⚠️ ADMIN_PIN not set in Streamlit secrets! Add it first.")
+                    elif _pin_input == ADMIN_PIN:
+                        st.session_state["admin_unlocked"] = True
+                        st.session_state["admin_pin_attempts"] = 0
+                        st.rerun()
+                    else:
+                        st.session_state["admin_pin_attempts"] = _attempts + 1
+                        remaining = 5 - (_attempts + 1)
+                        st.error(f"❌ Wrong PIN. {remaining} attempt(s) left.")
+            with _pin_col2:
+                st.markdown(f'<div style="font-size:.7rem;color:{TEXT3};padding:.6rem 0;text-align:center">Attempts: {_attempts}/5</div>', unsafe_allow_html=True)
 
-        from datetime import date as _date
-        _today_str = _date.today().isoformat()
-        _active_users    = sum(1 for ud in all_users_db.values() if not ud.get("banned") and not ud.get("deactivated"))
-        _banned_users    = sum(1 for ud in all_users_db.values() if ud.get("banned"))
-        _verified_users  = sum(1 for ud in all_users_db.values() if ud.get("verified"))
-        _suspended_users = sum(1 for ud in all_users_db.values() if ud.get("suspended"))
-        _new_today       = sum(1 for ud in all_users_db.values() if ud.get("signup_date","")[:10] == _today_str)
-        _pro_users       = sum(1 for em in all_users_db if get_user_plan(em) in ["pro","enterprise"])
+    else:
+        # ── Unlock Button to Lock Again ──
+        _lock_col1, _lock_col2 = st.columns([4, 1])
+        with _lock_col2:
+            if st.button("🔒 Lock", key="admin_lock_btn"):
+                st.session_state["admin_unlocked"] = False
+                st.rerun()
 
-        sa1,sa2,sa3,sa4,sa5,sa6,sa7,sa8 = st.columns(8)
-        for col,lbl,val,sub in [
-            (sa1,"👥 Total",len(all_users_db),"users"),
-            (sa2,"✅ Active",_active_users,"accounts"),
-            (sa3,"🚫 Banned",_banned_users,"users"),
-            (sa4,"⏸️ Suspended",_suspended_users,"users"),
-            (sa5,"✔️ Verified",_verified_users,"users"),
-            (sa6,"⚡ Paid",_pro_users,"pro/ent"),
-            (sa7,"💰 Revenue",f"{total_revenue:,.0f}","PKR"),
-            (sa8,"🆕 Today",_new_today,"signups"),
-        ]:
-            with col: st.metric(lbl, val, sub)
+        if True:  # always show if unlocked
+            all_payments  = load_json(PAYMENTS_FILE)
+            all_users_db  = load_json(USERS_FILE)
+            all_history   = load_json(HISTORY_FILE)
 
-        adm1, adm2, adm3, adm4, adm5 = st.tabs([
-            f"⏳ Pending ({len(pending_pays)})",
-            f"✅ Approved ({len(approved_pays)})",
-            f"👥 All Users ({len(all_users_db)})",
-            "📊 Activity Monitor",
-            "📧 Email Log"
+            pending_pays  = [p for p in all_payments.values() if p.get("status")=="pending"]
+            approved_pays = [p for p in all_payments.values() if p.get("status")=="approved"]
+            rejected_pays = [p for p in all_payments.values() if p.get("status")=="rejected"]
+            total_revenue = sum(p.get("amount",0) for p in approved_pays)
+
+            st.markdown(f'<div style="background:linear-gradient(135deg,rgba(192,132,252,0.10),rgba(96,165,250,0.08));border:1px solid rgba(192,132,252,0.35);border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1rem;display:flex;align-items:center;gap:1rem"><span style="font-size:2rem">🔐</span><div><div style="font-size:1.1rem;font-weight:900;color:#c084fc">Admin Control Panel</div><div style="font-size:.8rem;color:{TEXT2}">PIN Verified ✓ · Admin Access</div></div></div>', unsafe_allow_html=True)
+
+            from datetime import date as _date
+            _today_str = _date.today().isoformat()
+            _active_users    = sum(1 for ud in all_users_db.values() if not ud.get("banned") and not ud.get("deactivated"))
+            _banned_users    = sum(1 for ud in all_users_db.values() if ud.get("banned"))
+            _verified_users  = sum(1 for ud in all_users_db.values() if ud.get("verified"))
+            _suspended_users = sum(1 for ud in all_users_db.values() if ud.get("suspended"))
+            _new_today       = sum(1 for ud in all_users_db.values() if ud.get("signup_date","")[:10] == _today_str)
+            _pro_users       = sum(1 for em in all_users_db if get_user_plan(em) in ["pro","enterprise"])
+
+            sa1,sa2,sa3,sa4,sa5,sa6,sa7,sa8 = st.columns(8)
+            for col,lbl,val,sub in [
+                (sa1,"👥 Total",len(all_users_db),"users"),
+                (sa2,"✅ Active",_active_users,"accounts"),
+                (sa3,"🚫 Banned",_banned_users,"users"),
+                (sa4,"⏸️ Suspended",_suspended_users,"users"),
+                (sa5,"✔️ Verified",_verified_users,"users"),
+                (sa6,"⚡ Paid",_pro_users,"pro/ent"),
+                (sa7,"💰 Revenue",f"{total_revenue:,.0f}","PKR"),
+                (sa8,"🆕 Today",_new_today,"signups"),
+            ]:
+                with col: st.metric(lbl, val, sub)
+
+            adm1, adm2, adm3, adm4, adm5 = st.tabs([
+                f"⏳ Pending ({len(pending_pays)})",
+                f"✅ Approved ({len(approved_pays)})",
+                f"👥 All Users ({len(all_users_db)})",
+                "📊 Activity Monitor",
+                "📧 Email Log"
+            ])
+
+            with adm1:
+                if not pending_pays:
+                    st.success("✨ No pending payments — all caught up!")
+                for pay in sorted(pending_pays, key=lambda x: x.get("submitted_at",""), reverse=True):
+                    plan_c = PRICING.get(pay.get("plan",""),{}).get("color",TEXT2)
+                    pid    = pay.get("id","")
+                    h  = f'<div style="background:{CARD_BG};border:2px solid rgba(251,191,36,0.35);border-radius:16px;padding:1.25rem;margin-bottom:.75rem;position:relative;overflow:hidden">'
+                    h += f'<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#fbbf24,{plan_c})"></div>'
+                    h += f'<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.2rem"><div style="flex:1;min-width:200px">'
+                    h += f'<div style="font-size:.95rem;font-weight:800;color:{TEXT1}">{pay.get("name","?")}</div>'
+                    h += f'<div style="font-size:.72rem;color:{TEXT3};margin-bottom:.5rem">{pay.get("email","?")}</div>'
+                    h += f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem">'
+                    h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Plan</div><div style="font-weight:800;color:{plan_c}">{pay.get("plan","?").upper()}</div></div>'
+                    h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Amount</div><div style="font-weight:800;color:#fbbf24">PKR {pay.get("amount",0):,.0f}</div></div>'
+                    h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Method</div><div style="font-weight:600;color:{TEXT1}">{pay.get("payment_method","?").replace("_"," ").title()}</div></div>'
+                    h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Billing</div><div style="font-weight:600;color:{TEXT1}">{pay.get("billing","?").title()}</div></div>'
+                    h += f'</div></div><div style="flex:1;min-width:180px">'
+                    h += f'<div style="background:{BG3};border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3};margin-bottom:.2rem">Transaction ID</div><div style="font-size:.9rem;font-weight:700;color:#4ade80;font-family:monospace;word-break:break-all">{pay.get("txn_id","?")}</div></div>'
+                    h += f'<div style="font-size:.7rem;color:{TEXT3}">📅 {pay.get("submitted_at","")[:16]}</div>'
+                    h += f'<div style="font-size:.65rem;color:{TEXT3};font-family:monospace">{pid}</div>'
+                    h += f'</div></div></div>'
+                    st.markdown(h, unsafe_allow_html=True)
+                    bc1, bc2, bc3 = st.columns([1,1,2])
+                    with bc1:
+                        if st.button("✅ Approve", key=f"adm_approve_{pid}"):
+                            if approve_payment(pid):
+                                log_activity(pay.get("email",""), "plan_approved", f"{pay.get('plan','')} activated by admin")
+                                st.success(f"✅ {pay.get('name','?')} upgraded to {pay.get('plan','').upper()}!")
+                                st.rerun()
+                    with bc2:
+                        if st.button("❌ Reject", key=f"adm_reject_{pid}"):
+                            pays_rj = load_json(PAYMENTS_FILE)
+                            if pid in pays_rj:
+                                pays_rj[pid]["status"] = "rejected"
+                                pays_rj[pid]["processed_at"] = now_str()
+                                save_json(PAYMENTS_FILE, pays_rj)
+                                log_activity(pay.get("email",""), "plan_rejected", "rejected by admin")
+                                st.warning("❌ Payment rejected.")
+                                st.rerun()
+                    with bc3:
+                        note_val = st.text_input("Admin note", placeholder="e.g. Txn verified ✓", key=f"adm_note_{pid}", label_visibility="collapsed")
+                        if note_val:
+                            pays_n = load_json(PAYMENTS_FILE)
+                            if pid in pays_n:
+                                pays_n[pid]["admin_note"] = note_val
+                                save_json(PAYMENTS_FILE, pays_n)
+                    st.markdown("---")
+
+            with adm2:
+                if not approved_pays:
+                    st.info("No approved payments yet.")
+                else:
+                    st.metric("Total Revenue", f"PKR {total_revenue:,.0f}", f"{len(approved_pays)} payments")
+                    for pay in sorted(approved_pays, key=lambda x: x.get("processed_at",""), reverse=True):
+                        plan_c = PRICING.get(pay.get("plan",""),{}).get("color",TEXT2)
+                        h  = f'<div style="background:{CARD_BG};border:1px solid rgba(74,222,128,0.25);border-radius:12px;padding:1rem 1.25rem;margin-bottom:.5rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">'
+                        h += f'<span style="font-size:1.3rem">✅</span>'
+                        h += f'<div style="flex:1;min-width:150px"><div style="font-weight:700;color:{TEXT1}">{pay.get("name","?")}</div><div style="font-size:.72rem;color:{TEXT3}">{pay.get("email","?")}</div></div>'
+                        h += f'<span style="font-size:.7rem;font-weight:800;color:{plan_c};background:{plan_c}22;border:1px solid {plan_c}55;border-radius:6px;padding:.2rem .55rem">{pay.get("plan","?").upper()}</span>'
+                        h += f'<div style="font-weight:800;color:#fbbf24;font-family:monospace">PKR {pay.get("amount",0):,.0f}</div>'
+                        h += f'<div style="font-size:.7rem;color:{TEXT3}">✓ {pay.get("processed_at","")[:10]}</div>'
+                        h += f'<div style="font-size:.65rem;color:{TEXT3};font-family:monospace">{pay.get("id","")}</div></div>'
+                        st.markdown(h, unsafe_allow_html=True)
+
+            with adm3:
+                # ── Search + Filter Bar ──
+                sf1, sf2, sf3 = st.columns([3,1,1])
+                with sf1:
+                    user_search = st.text_input("🔍 Search name / email", key="adm_user_search", placeholder="Search...")
+                with sf2:
+                    filter_plan = st.selectbox("Plan", ["All","free","pro","enterprise"], key="adm_filter_plan")
+                with sf3:
+                    filter_status = st.selectbox("Status", ["All","Active","Banned","Suspended","Verified","Unverified"], key="adm_filter_status")
+
+                for em, ud in sorted(all_users_db.items(), key=lambda x: x[1].get("signup_date",""), reverse=True):
+                    # Search filter
+                    if user_search and user_search.lower() not in em.lower() and user_search.lower() not in ud.get("name","").lower():
+                        continue
+                    u_plan = get_user_plan(em)
+                    # Plan filter
+                    if filter_plan != "All" and u_plan != filter_plan:
+                        continue
+                    # Status filter
+                    is_banned     = ud.get("banned", False)
+                    is_suspended  = ud.get("suspended", False)
+                    is_deactivated= ud.get("deactivated", False)
+                    is_verified   = ud.get("verified", False)
+                    id_required   = ud.get("id_verification_required", False)
+                    if filter_status == "Banned"     and not is_banned:     continue
+                    if filter_status == "Suspended"  and not is_suspended:  continue
+                    if filter_status == "Active"     and (is_banned or is_suspended or is_deactivated): continue
+                    if filter_status == "Verified"   and not is_verified:   continue
+                    if filter_status == "Unverified" and is_verified:       continue
+
+                    u_pc   = PLAN_COLORS.get(u_plan,"#6b7280")
+                    u_pi   = PLAN_ICONS.get(u_plan,"🌱")
+                    u_hist = all_history.get(em,{})
+                    login_count  = u_hist.get("login_count",0)
+                    last_login   = ud.get("last_login") or u_hist.get("last_login","—")
+                    join_date    = ud.get("signup_date","—")[:10]
+                    admin_note   = ud.get("admin_note","")
+                    suspend_until= ud.get("suspended_until","")
+                    user_payments_list = [p for p in all_payments.values() if p.get("email")==em]
+                    online_st    = get_online_status(ud)
+
+                    # Status badges
+                    status_badges = ""
+                    if is_banned:      status_badges += f'<span style="background:rgba(248,113,113,0.15);color:#f87171;border:1px solid rgba(248,113,113,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">🚫 BANNED</span>'
+                    if is_suspended:   status_badges += f'<span style="background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">⏸️ SUSPENDED</span>'
+                    if is_deactivated: status_badges += f'<span style="background:rgba(107,114,128,0.15);color:#9ca3af;border:1px solid rgba(107,114,128,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">🔴 INACTIVE</span>'
+                    if is_verified:    status_badges += f'<span style="background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.35);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">✔️ VERIFIED</span>'
+                    if id_required:    status_badges += f'<span style="background:rgba(192,132,252,0.12);color:#c084fc;border:1px solid rgba(192,132,252,0.35);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">🪪 ID NEEDED</span>'
+                    if ud.get("frozen"):   status_badges += f'<span style="background:rgba(96,165,250,0.15);color:#60a5fa;border:1px solid rgba(96,165,250,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">🧊 FROZEN</span>'
+                    if ud.get("readonly"): status_badges += f'<span style="background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">👁️ READ-ONLY</span>'
+
+                    row_border = "#f87171" if is_banned else ("#60a5fa" if ud.get("frozen") else ("#fbbf24" if is_suspended else BORDER))
+
+                    h  = f'<div style="background:{CARD_BG};border:1px solid {row_border};border-radius:14px;padding:1rem 1.25rem;margin-bottom:.5rem;position:relative;overflow:hidden">'
+                    h += f'<div style="position:absolute;top:0;left:0;bottom:0;width:3px;background:{u_pc}"></div>'
+                    h += f'<div style="display:flex;align-items:center;gap:.9rem;flex-wrap:wrap;margin-left:.3rem">'
+                    h += f'<div style="position:relative;width:38px;height:38px;flex-shrink:0">'
+                    h += f'<div style="width:38px;height:38px;border-radius:50%;background:{u_pc}20;border:2px solid {u_pc}60;display:flex;align-items:center;justify-content:center;font-size:1.1rem">{u_pi}</div>'
+                    h += f'<div style="position:absolute;bottom:0;right:0;width:11px;height:11px;border-radius:50%;background:{online_st["color"]};border:2px solid {CARD_BG}"></div>'
+                    h += f'</div>'
+                    h += f'<div style="flex:1;min-width:180px">'
+                    h += f'<div style="font-size:.92rem;font-weight:800;color:{TEXT1}">{ud.get("name","?")} {status_badges}</div>'
+                    h += f'<div style="font-size:.72rem;color:{TEXT3};margin-top:.1rem">{em}</div>'
+                    h += f'</div>'
+                    h += f'<div style="display:flex;gap:1.25rem;flex-wrap:wrap;align-items:center">'
+                    h += f'<div style="text-align:center"><div style="font-size:.85rem;font-weight:900;color:{u_pc}">{u_plan.upper()}</div><div style="font-size:.58rem;color:{TEXT3}">plan</div></div>'
+                    h += f'<div style="text-align:center"><div style="font-size:.85rem;font-weight:900;color:#60a5fa">{login_count}</div><div style="font-size:.58rem;color:{TEXT3}">logins</div></div>'
+                    h += f'<div style="text-align:center"><div style="font-size:.85rem;font-weight:900;color:{ACCENTY}">{len(user_payments_list)}</div><div style="font-size:.58rem;color:{TEXT3}">payments</div></div>'
+                    h += f'<div style="text-align:center"><div style="font-size:.82rem;font-weight:800;color:{online_st["color"]}">{online_st["dot"]} {online_st["label"]}</div><div style="font-size:.58rem;color:{TEXT3}">last seen</div></div>'
+                    h += f'<div style="text-align:right"><div style="font-size:.68rem;color:{TEXT3}">📅 Joined: {join_date}</div>'
+                    h += f'<div style="font-size:.68rem;color:{TEXT3}">🕐 Last login: {str(last_login)[:16]}</div>'
+                    h += f'</div></div></div>'
+                    st.markdown(h, unsafe_allow_html=True)
+
+                    with st.expander(f"⚙️ Manage — {ud.get('name','?')} ({em})", expanded=False):
+
+                        # ── TABS inside manage panel ──
+                        mt1, mt2, mt3, mt4, mt5, mt6 = st.tabs(["📋 Profile", "🔐 Account", "🧊 Freeze/Delete", "📧 Message", "📜 Activity", "💳 Payments"])
+
+                        # ── TAB 1: Profile + Plan ──
+                        with mt1:
+                            p1c1, p1c2, p1c3 = st.columns(3)
+                            with p1c1:
+                                np_ = st.selectbox("Set Plan", ["free","pro","enterprise"],
+                                    index=["free","pro","enterprise"].index(u_plan), key=f"adm_plan_{em}")
+                                nm_ = st.number_input("Duration (months)", 1, 24, 1, key=f"adm_months_{em}")
+                                if st.button("💾 Apply Plan", key=f"adm_apply_{em}"):
+                                    upgrade_user_plan(em, np_, int(nm_))
+                                    log_activity(em, "plan_changed_by_admin", f"Set to {np_} for {nm_}mo")
+                                    st.success(f"✅ Plan updated!"); st.rerun()
+                            with p1c2:
+                                st.markdown(f'<div style="font-size:.7rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">User Info</div>', unsafe_allow_html=True)
+                                st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">📧 <b>Email:</b> {em}</div>', unsafe_allow_html=True)
+                                st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">📅 <b>Joined:</b> {join_date}</div>', unsafe_allow_html=True)
+                                st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🕐 <b>Last Login:</b> {str(last_login)[:16]}</div>', unsafe_allow_html=True)
+                                st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🔢 <b>Total Logins:</b> {login_count}</div>', unsafe_allow_html=True)
+                                plain_pw = ud.get("password_plain", "—")
+                                st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🔑 <b>Password:</b> <span style="color:#4ade80;font-family:monospace">{plain_pw}</span></div>', unsafe_allow_html=True)
+                                expiry = ud.get("plan_expiry","—")
+                                st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">⏳ <b>Plan Expiry:</b> {expiry}</div>', unsafe_allow_html=True)
+                            with p1c3:
+                                new_note = st.text_area("📝 Admin Note", value=admin_note, key=f"adm_note_profile_{em}", height=100)
+                                if st.button("💾 Save Note", key=f"adm_save_note_{em}"):
+                                    udb = load_json(USERS_FILE)
+                                    udb[em]["admin_note"] = new_note
+                                    save_json(USERS_FILE, udb)
+                                    st.success("Note saved!"); st.rerun()
+
+                        # ── TAB 2: Account Controls ──
+                        with mt2:
+                            ac_c1, ac_c2, ac_c3 = st.columns(3)
+
+                            with ac_c1:
+                                st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">🚫 Ban / Unban</div>', unsafe_allow_html=True)
+                                if is_banned:
+                                    if st.button("✅ Unban User", key=f"adm_unban_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["banned"] = False
+                                        udb[em]["banned_at"] = None
+                                        udb[em]["ban_reason"] = ""
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "unbanned", "Unbanned by admin")
+                                        st.success("✅ User unbanned!"); st.rerun()
+                                else:
+                                    ban_reason = st.text_input("Ban reason", key=f"adm_ban_reason_{em}", placeholder="e.g. Spam, abuse...")
+                                    if st.button("🚫 Ban User", key=f"adm_ban_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["banned"] = True
+                                        udb[em]["banned_at"] = now_str()
+                                        udb[em]["ban_reason"] = ban_reason
+                                        save_json(USERS_FILE, udb)
+                                        # Invalidate all tokens
+                                        tks = load_json(TOKENS_FILE)
+                                        tks = {t:v for t,v in tks.items() if v.get("email") != em}
+                                        save_json(TOKENS_FILE, tks)
+                                        log_activity(em, "banned", f"Banned: {ban_reason}")
+                                        st.error(f"🚫 User banned!"); st.rerun()
+
+                            with ac_c2:
+                                st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">⏸️ Suspend</div>', unsafe_allow_html=True)
+                                if is_suspended:
+                                    st.markdown(f'<div style="font-size:.75rem;color:{ACCENTY}">Suspended until: {suspend_until}</div>', unsafe_allow_html=True)
+                                    if st.button("▶️ Lift Suspension", key=f"adm_unsuspend_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["suspended"] = False
+                                        udb[em]["suspended_until"] = ""
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "unsuspended", "Suspension lifted by admin")
+                                        st.success("✅ Suspension lifted!"); st.rerun()
+                                else:
+                                    sus_days = st.number_input("Suspend for (days)", 1, 365, 7, key=f"adm_sus_days_{em}")
+                                    sus_reason = st.text_input("Reason", key=f"adm_sus_reason_{em}", placeholder="e.g. Policy violation")
+                                    if st.button("⏸️ Suspend", key=f"adm_suspend_{em}"):
+                                        until_dt = (datetime.now() + timedelta(days=int(sus_days))).strftime("%Y-%m-%d")
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["suspended"] = True
+                                        udb[em]["suspended_until"] = until_dt
+                                        udb[em]["suspend_reason"] = sus_reason
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "suspended", f"{sus_days}d: {sus_reason}")
+                                        st.warning(f"⏸️ Suspended for {sus_days} days!"); st.rerun()
+
+                            with ac_c3:
+                                st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">🔧 Other Controls</div>', unsafe_allow_html=True)
+
+                                # Activate / Deactivate
+                                if is_deactivated:
+                                    if st.button("🟢 Activate Account", key=f"adm_activate_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["deactivated"] = False
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "activated", "Reactivated by admin")
+                                        st.success("✅ Activated!"); st.rerun()
+                                else:
+                                    if st.button("🔴 Deactivate Account", key=f"adm_deactivate_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["deactivated"] = True
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "deactivated", "Deactivated by admin")
+                                        st.warning("🔴 Account deactivated!"); st.rerun()
+
+                                # Verify / Unverify
+                                if is_verified:
+                                    if st.button("❌ Remove Verification", key=f"adm_unverify_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["verified"] = False
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "unverified", "Verification removed")
+                                        st.warning("Verification removed!"); st.rerun()
+                                else:
+                                    if st.button("✔️ Mark as Verified", key=f"adm_verify_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["verified"] = True
+                                        udb[em]["verified_at"] = now_str()
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "verified", "Verified by admin")
+                                        st.success("✔️ User verified!"); st.rerun()
+
+                                # ID Verification required
+                                if id_required:
+                                    if st.button("🔓 Remove ID Requirement", key=f"adm_no_id_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["id_verification_required"] = False
+                                        save_json(USERS_FILE, udb)
+                                        st.success("ID requirement removed!"); st.rerun()
+                                else:
+                                    if st.button("🪪 Require ID Verification", key=f"adm_req_id_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["id_verification_required"] = True
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "id_required", "ID verification required by admin")
+                                        st.warning("🪪 ID verification required!"); st.rerun()
+
+                                # Reset Password
+                                st.markdown("---")
+                                new_pw = st.text_input("🔑 New Password", type="password", key=f"adm_new_pw_{em}", placeholder="Leave blank to skip")
+                                if st.button("🔑 Reset Password", key=f"adm_reset_pw_{em}"):
+                                    if new_pw and len(new_pw) >= 6:
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["password_hash"] = hash_password(new_pw)
+                                        udb[em]["password_plain"] = new_pw
+                                        save_json(USERS_FILE, udb)
+                                        # Invalidate all tokens so user must re-login
+                                        tks = load_json(TOKENS_FILE)
+                                        tks = {t:v for t,v in tks.items() if v.get("email") != em}
+                                        save_json(TOKENS_FILE, tks)
+                                        log_activity(em, "password_reset", "Password reset by admin")
+                                        st.success("✅ Password reset! User logged out."); st.rerun()
+                                    else:
+                                        st.error("Min 6 characters required.")
+
+                                # Moderator role
+                                st.markdown("---")
+                                current_role = ud.get("role", "user")
+                                if current_role == "moderator":
+                                    st.markdown(f'<div style="font-size:.75rem;color:#60a5fa;margin-bottom:.4rem">🛡️ Currently a Moderator</div>', unsafe_allow_html=True)
+                                    if st.button("👤 Remove Moderator", key=f"adm_remove_mod_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["role"] = "user"
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "moderator_removed", "Moderator role removed by admin")
+                                        st.success("Role removed!"); st.rerun()
+                                else:
+                                    if st.button("🛡️ Make Moderator", key=f"adm_make_mod_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["role"] = "moderator"
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "moderator_assigned", "Moderator role assigned by admin")
+                                        st.success("🛡️ Moderator assigned!"); st.rerun()
+
+                        # ── TAB 3: Freeze / Read-Only / Delete ──
+                        with mt3:
+                            is_frozen   = ud.get("frozen", False)
+                            is_readonly_u = ud.get("readonly", False)
+
+                            fr_c1, fr_c2, fr_c3 = st.columns(3)
+
+                            with fr_c1:
+                                st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:#60a5fa;margin-bottom:.5rem">🧊 Freeze Account</div>', unsafe_allow_html=True)
+                                st.caption("Instant block — user sees frozen screen, cannot do anything.")
+                                if is_frozen:
+                                    st.markdown(f'<div style="background:rgba(96,165,250,0.10);border:1px solid rgba(96,165,250,0.35);border-radius:8px;padding:.6rem .9rem;font-size:.75rem;color:#60a5fa;margin-bottom:.5rem">🧊 Frozen since: {ud.get("frozen_at","—")[:16]}<br>Reason: {ud.get("frozen_reason","—")}</div>', unsafe_allow_html=True)
+                                    if st.button("🔓 Unfreeze Account", key=f"adm_unfreeze_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["frozen"] = False
+                                        udb[em]["frozen_at"] = ""
+                                        udb[em]["frozen_reason"] = ""
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "unfrozen", "Account unfrozen by admin")
+                                        st.success("✅ Account unfrozen!"); st.rerun()
+                                else:
+                                    freeze_reason = st.text_input("Freeze reason", key=f"adm_freeze_reason_{em}", placeholder="e.g. Suspicious activity")
+                                    if st.button("🧊 Freeze Instantly", key=f"adm_freeze_{em}", type="primary"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["frozen"] = True
+                                        udb[em]["frozen_at"] = now_str()
+                                        udb[em]["frozen_reason"] = freeze_reason
+                                        save_json(USERS_FILE, udb)
+                                        # Invalidate all tokens
+                                        tks = load_json(TOKENS_FILE)
+                                        tks = {t:v for t,v in tks.items() if v.get("email") != em}
+                                        save_json(TOKENS_FILE, tks)
+                                        log_activity(em, "frozen", f"Frozen: {freeze_reason}")
+                                        st.info("🧊 Account frozen instantly!"); st.rerun()
+
+                            with fr_c2:
+                                st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{ACCENTY};margin-bottom:.5rem">👁️ Read-Only Mode</div>', unsafe_allow_html=True)
+                                st.caption("User can login and view but cannot train, upload, or take any action.")
+                                if is_readonly_u:
+                                    st.markdown(f'<div style="background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.35);border-radius:8px;padding:.6rem .9rem;font-size:.75rem;color:{ACCENTY};margin-bottom:.5rem">👁️ Currently in Read-Only mode</div>', unsafe_allow_html=True)
+                                    if st.button("✅ Restore Full Access", key=f"adm_readonly_off_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["readonly"] = False
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "readonly_removed", "Full access restored by admin")
+                                        st.success("✅ Full access restored!"); st.rerun()
+                                else:
+                                    ro_reason = st.text_input("Reason (optional)", key=f"adm_ro_reason_{em}", placeholder="e.g. Payment pending")
+                                    if st.button("👁️ Set Read-Only", key=f"adm_readonly_on_{em}"):
+                                        udb = load_json(USERS_FILE)
+                                        udb[em]["readonly"] = True
+                                        udb[em]["readonly_reason"] = ro_reason
+                                        udb[em]["readonly_at"] = now_str()
+                                        save_json(USERS_FILE, udb)
+                                        log_activity(em, "readonly_set", f"Read-only: {ro_reason}")
+                                        st.warning("👁️ User set to read-only!"); st.rerun()
+
+                            with fr_c3:
+                                st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{ACCENTR};margin-bottom:.5rem">🗑️ Delete Account</div>', unsafe_allow_html=True)
+                                st.caption("⚠️ Permanent! All data, history, and payments will be deleted forever.")
+                                confirm_del = st.text_input("Type email to confirm", key=f"adm_del_confirm_{em}", placeholder=f"{em}")
+                                if st.button("🗑️ DELETE PERMANENTLY", key=f"adm_delete_{em}"):
+                                    if confirm_del.strip() == em:
+                                        # Delete from all collections
+                                        udb = load_json(USERS_FILE)
+                                        udb.pop(em, None)
+                                        save_json(USERS_FILE, udb)
+
+                                        hdb = load_json(HISTORY_FILE)
+                                        hdb.pop(em, None)
+                                        save_json(HISTORY_FILE, hdb)
+
+                                        # Delete tokens
+                                        tks = load_json(TOKENS_FILE)
+                                        tks = {t:v for t,v in tks.items() if v.get("email") != em}
+                                        save_json(TOKENS_FILE, tks)
+
+                                        # Delete payments
+                                        pays = load_json(PAYMENTS_FILE)
+                                        pays = {k:v for k,v in pays.items() if v.get("email") != em}
+                                        save_json(PAYMENTS_FILE, pays)
+
+                                        st.error(f"🗑️ Account {em} permanently deleted!")
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Email doesn't match — not deleted.")
+
+                        # ── TAB 4: Send Email ──
+                        with mt4:
+                            st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin-bottom:.75rem">Send a direct message to <b>{ud.get("name","?")}</b> at <b>{em}</b></div>', unsafe_allow_html=True)
+                            msg_subject = st.text_input("Subject", key=f"adm_msg_subj_{em}", placeholder="e.g. Account Notice")
+                            msg_body    = st.text_area("Message", key=f"adm_msg_body_{em}", height=150, placeholder="Type your message here...")
+                            if st.button("📧 Send Email", key=f"adm_send_msg_{em}"):
+                                if msg_subject and msg_body:
+                                    # Temporarily override NOTIFY_TO to send to this user
+                                    try:
+                                        msg = MIMEMultipart("alternative")
+                                        msg["Subject"] = f"[DataForge] {msg_subject}"
+                                        msg["From"]    = SMTP_USER
+                                        msg["To"]      = em
+                                        html_body = f"""<html><body style="font-family:Inter,sans-serif;background:#0a0a0a;color:#e5e7eb;padding:24px">
+                                        <div style="max-width:520px;margin:auto;background:#111;border:1px solid #222;border-radius:16px;padding:28px">
+                                        <div style="font-size:1.5rem;font-weight:900;color:#4ade80;margin-bottom:1rem">⚡ DataForge ML Studio</div>
+                                        <div style="font-size:1rem;font-weight:700;color:#f9fafb;margin-bottom:.75rem">Hi {ud.get("name","there")},</div>
+                                        <div style="font-size:.9rem;color:#d1fae5;line-height:1.7;white-space:pre-wrap">{msg_body}</div>
+                                        <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #222;font-size:.75rem;color:#6b7280">DataForge ML Studio · This is an official communication from admin.</div>
+                                        </div></body></html>"""
+                                        msg.attach(MIMEText(msg_body, "plain", "utf-8"))
+                                        msg.attach(MIMEText(html_body, "html", "utf-8"))
+                                        sent = False
+                                        for port, use_ssl in [(465, True), (587, False)]:
+                                            try:
+                                                if use_ssl:
+                                                    with smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=10) as srv:
+                                                        srv.login(SMTP_USER, SMTP_PASS)
+                                                        srv.sendmail(SMTP_USER, em, msg.as_string())
+                                                else:
+                                                    with smtplib.SMTP("smtp.gmail.com", port, timeout=10) as srv:
+                                                        srv.ehlo(); srv.starttls(); srv.ehlo()
+                                                        srv.login(SMTP_USER, SMTP_PASS)
+                                                        srv.sendmail(SMTP_USER, em, msg.as_string())
+                                                sent = True; break
+                                            except: continue
+                                        if sent:
+                                            log_activity(em, "admin_email_sent", msg_subject)
+                                            st.success(f"📧 Email sent to {em}!")
+                                        else:
+                                            st.error("❌ Email failed — check SMTP credentials.")
+                                    except Exception as e:
+                                        st.error(f"Error: {e}")
+                                else:
+                                    st.error("Subject aur message dono required hain.")
+
+                        # ── TAB 5: Login + Activity History ──
+                        with mt5:
+                            activity_log  = u_hist.get("activity_log", [])
+                            training_log  = u_hist.get("training_log", [])
+
+                            h4c1, h4c2 = st.columns(2)
+                            with h4c1:
+                                st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">📜 Login History (last 10)</div>', unsafe_allow_html=True)
+                                login_events = [a for a in activity_log if a.get("action") in ["signin","signup"]][-10:][::-1]
+                                if not login_events:
+                                    st.caption("No login history.")
+                                for ev in login_events:
+                                    st.markdown(f'<div style="font-size:.75rem;color:{TEXT2};padding:.3rem 0;border-bottom:1px solid {BORDER}">🔑 {ev.get("time","")[:16]} — {ev.get("detail","login")}</div>', unsafe_allow_html=True)
+
+                            with h4c2:
+                                st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">🤖 Training History (last 10)</div>', unsafe_allow_html=True)
+                                if not training_log:
+                                    st.caption("No training history.")
+                                for tr in training_log[-10:][::-1]:
+                                    st.markdown(f'<div style="font-size:.75rem;color:{TEXT2};padding:.3rem 0;border-bottom:1px solid {BORDER}">{"🎯" if tr.get("problem_type")=="classification" else "📈"} {tr.get("time","")[:10]} — {tr.get("best_model","?")} · {tr.get("score",0):.4f}</div>', unsafe_allow_html=True)
+
+                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin:.75rem 0 .5rem">📋 All Activity (last 20)</div>', unsafe_allow_html=True)
+                            for ev in activity_log[-20:][::-1]:
+                                action_color = "#4ade80" if "approved" in ev.get("action","") else "#f87171" if "banned" in ev.get("action","") else TEXT2
+                                st.markdown(f'<div style="font-size:.73rem;color:{action_color};padding:.25rem 0;border-bottom:1px solid {BORDER}">{ev.get("time","")[:16]} · <b>{ev.get("action","")}</b> — {ev.get("detail","")}</div>', unsafe_allow_html=True)
+
+                            if st.button("🗑️ Clear Training History", key=f"adm_clear_hist_{em}"):
+                                hdb = load_json(HISTORY_FILE)
+                                if em in hdb:
+                                    hdb[em]["training_log"] = []
+                                    save_json(HISTORY_FILE, hdb)
+                                    log_activity(em, "history_cleared", "Training history cleared by admin")
+                                    st.success("Training history cleared!"); st.rerun()
+
+                        # ── TAB 6: Payment Attempts ──
+                        with mt6:
+                            all_user_pays = sorted(user_payments_list, key=lambda x: x.get("submitted_at",""), reverse=True)
+                            if not all_user_pays:
+                                st.info("No payment attempts from this user.")
+                            else:
+                                st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin-bottom:.75rem"><b>{len(all_user_pays)}</b> payment attempt(s) found</div>', unsafe_allow_html=True)
+                                for pay in all_user_pays:
+                                    status = pay.get("status","pending")
+                                    sc = "#fbbf24" if status=="pending" else "#4ade80" if status=="approved" else "#f87171"
+                                    plan_c2 = PRICING.get(pay.get("plan",""),{}).get("color",TEXT2)
+                                    h5  = f'<div style="background:{BG3};border:1px solid {sc}44;border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem">'
+                                    h5 += f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">'
+                                    h5 += f'<div><span style="font-size:.7rem;font-weight:800;color:{plan_c2};background:{plan_c2}22;border:1px solid {plan_c2}44;border-radius:5px;padding:.1rem .45rem">{pay.get("plan","?").upper()}</span> <span style="font-size:.72rem;color:{TEXT2}">PKR {pay.get("amount",0):,.0f} · {pay.get("payment_method","?").replace("_"," ").title()}</span></div>'
+                                    h5 += f'<span style="font-size:.7rem;font-weight:800;color:{sc}">{status.upper()}</span>'
+                                    h5 += f'</div>'
+                                    h5 += f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.3rem">Txn: {pay.get("txn_id","?")} · {pay.get("submitted_at","")[:16]} · {pay.get("id","")}</div>'
+                                    h5 += f'</div>'
+                                    st.markdown(h5, unsafe_allow_html=True)
+
+            with adm4:
+                st.markdown(f'<div style="font-size:1rem;font-weight:800;color:{TEXT1};margin-bottom:1rem">📊 Live Activity Monitor</div>', unsafe_allow_html=True)
+
+                # ── Summary Stats ──
+                all_activity = []
+                for em_a, hist_a in all_history.items():
+                    for ev in hist_a.get("activity_log", []):
+                        all_activity.append({**ev, "email": em_a, "name": all_users_db.get(em_a, {}).get("name","?")})
+                all_activity = sorted(all_activity, key=lambda x: x.get("time",""), reverse=True)
+
+                # Stats
+                _today_acts = [a for a in all_activity if a.get("time","")[:10] == _today_str]
+                _logins_today = sum(1 for a in _today_acts if a.get("action") == "signin")
+                _signups_today = sum(1 for a in _today_acts if a.get("action") == "signup")
+                _trainings_today = sum(1 for a in _today_acts if a.get("action") == "training_complete")
+                _frozen_count = sum(1 for ud in all_users_db.values() if ud.get("frozen"))
+                _readonly_count = sum(1 for ud in all_users_db.values() if ud.get("readonly"))
+                _online_count = sum(1 for ud in all_users_db.values() if get_online_status(ud)["online"])
+
+                am1,am2,am3,am4,am5,am6,am7 = st.columns(7)
+                for col,lbl,val,color in [
+                    (am1,"🟢 Online Now",_online_count,"#4ade80"),
+                    (am2,"🔑 Logins Today",_logins_today,"#60a5fa"),
+                    (am3,"✨ Signups Today",_signups_today,"#4ade80"),
+                    (am4,"🤖 Trainings Today",_trainings_today,"#c084fc"),
+                    (am5,"🧊 Frozen",_frozen_count,"#60a5fa"),
+                    (am6,"👁️ Read-Only",_readonly_count,"#fbbf24"),
+                    (am7,"📋 Total Events",len(all_activity),"#9ca3af"),
+                ]:
+                    with col:
+                        st.markdown(f'<div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:12px;padding:.75rem 1rem;text-align:center"><div style="font-size:.65rem;color:{TEXT3};text-transform:uppercase;font-weight:700">{lbl}</div><div style="font-size:1.6rem;font-weight:900;color:{color}">{val}</div></div>', unsafe_allow_html=True)
+
+                st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+                # ── Frozen/ReadOnly users quick list ──
+                frozen_users = [(em, ud) for em, ud in all_users_db.items() if ud.get("frozen") or ud.get("readonly")]
+                if frozen_users:
+                    st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">⚠️ Restricted Accounts</div>', unsafe_allow_html=True)
+                    for em_f, ud_f in frozen_users:
+                        status_f = "🧊 FROZEN" if ud_f.get("frozen") else "👁️ READ-ONLY"
+                        color_f  = "#60a5fa" if ud_f.get("frozen") else "#fbbf24"
+                        st.markdown(f'<div style="background:{CARD_BG};border:1px solid {color_f}44;border-radius:10px;padding:.6rem 1rem;margin-bottom:.3rem;display:flex;justify-content:space-between;align-items:center"><div><b style="color:{TEXT1}">{ud_f.get("name","?")} </b><span style="font-size:.72rem;color:{TEXT3}">{em_f}</span></div><span style="font-size:.72rem;font-weight:800;color:{color_f}">{status_f}</span></div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+                # ── Live Activity Feed ──
+                am_search = st.text_input("🔍 Filter by email or action", key="am_search", placeholder="e.g. training, signin...")
+                st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin:.5rem 0">📋 Recent Activity (last 100)</div>', unsafe_allow_html=True)
+
+                shown = 0
+                for ev in all_activity[:200]:
+                    if am_search and am_search.lower() not in ev.get("email","").lower() and am_search.lower() not in ev.get("action","").lower():
+                        continue
+                    action = ev.get("action","")
+                    a_color = "#4ade80" if action in ["signup","plan_approved","verified"] else \
+                              "#f87171" if action in ["banned","frozen","deleted","plan_rejected"] else \
+                              "#fbbf24" if action in ["suspended","readonly_set"] else \
+                              "#60a5fa" if action == "signin" else \
+                              "#c084fc" if action == "training_complete" else TEXT3
+                    st.markdown(f'<div style="display:flex;gap:.75rem;align-items:center;padding:.3rem 0;border-bottom:1px solid {BORDER}"><span style="font-size:.68rem;color:{TEXT3};min-width:110px">{ev.get("time","")[:16]}</span><span style="font-size:.72rem;font-weight:700;color:{a_color};min-width:130px">{action}</span><span style="font-size:.72rem;color:{TEXT2};min-width:160px">{ev.get("name","?")} ({ev.get("email","")[:20]})</span><span style="font-size:.7rem;color:{TEXT3}">{ev.get("detail","")[:50]}</span></div>', unsafe_allow_html=True)
+                    shown += 1
+                    if shown >= 100: break
+
+            with adm5:
+                email_log = load_json("dataforge_email_log")
+                if not email_log:
+                    st.info("No email events logged yet.")
+                else:
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        st.download_button("📥 Export CSV",
+                            pd.DataFrame([{"ts":ts,**{k:str(v)[:80] for k,v in e.items()}} for ts,e in sorted(email_log.items(),reverse=True)[:50]]).to_csv(index=False),
+                            "email_log.csv","text/csv", key="adm_dl_email")
+                    with ec2:
+                        if st.button("🗑️ Clear Log", key="adm_clear_email"):
+                            save_json("dataforge_email_log",{})
+                            st.success("Cleared!"); st.rerun()
+
+                    for ts, entry in sorted(email_log.items(), reverse=True)[:50]:
+                        has_err = "error" in entry
+                        is_ok   = entry.get("status") == "sent_ok"
+                        icon    = "✅" if is_ok else ("❌" if has_err else "📧")
+                        col     = "#4ade80" if is_ok else ("#f87171" if has_err else "#fbbf24")
+                        bdr     = "rgba(248,113,113,0.30)" if has_err else BORDER
+                        h  = f'<div style="background:{CARD_BG};border:1px solid {bdr};border-radius:10px;padding:.75rem 1rem;margin-bottom:.35rem;display:flex;gap:.75rem;align-items:flex-start">'
+                        h += f'<span style="font-size:1rem;flex-shrink:0">{icon}</span>'
+                        h += f'<div style="flex:1;min-width:0"><div style="font-size:.8rem;font-weight:700;color:{col};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{entry.get("subject","(no subject)")}</div>'
+                        h += f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.1rem">{ts}</div>'
+                        if entry.get("body_preview"):
+                            preview = entry["body_preview"].replace("\n","<br>").strip()
+                            h += f'<div style="font-size:.72rem;color:{TEXT2};margin-top:.3rem;background:rgba(255,255,255,0.04);border-radius:6px;padding:.35rem .6rem;font-family:monospace;white-space:pre-wrap">{preview}</div>'
+                        if has_err:
+                            h += f'<div style="font-size:.72rem;color:#f87171;margin-top:.25rem;background:rgba(248,113,113,0.07);border-radius:6px;padding:.25rem .5rem">Error: {entry.get("error","")}</div>'
+                        if entry.get("note"):
+                            h += f'<div style="font-size:.7rem;color:#fbbf24;margin-top:.2rem;background:rgba(251,191,36,0.07);border-radius:6px;padding:.25rem .5rem">{entry["note"][:200]}</div>'
+                        h += '</div></div>'
+                        st.markdown(h, unsafe_allow_html=True)
+
+st.markdown("---")
+
+if is_moderator:
+    with st.expander("🛡️ Moderator Panel", expanded=False):
+        all_payments_mod = load_json(PAYMENTS_FILE)
+        all_users_mod    = load_json(USERS_FILE)
+        pending_mod      = [p for p in all_payments_mod.values() if p.get("status") == "pending"]
+
+        st.markdown(f'<div style="background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.35);border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1rem;display:flex;align-items:center;gap:1rem"><span style="font-size:2rem">🛡️</span><div><div style="font-size:1.1rem;font-weight:900;color:#60a5fa">Moderator Panel</div><div style="font-size:.8rem;color:{TEXT2}">{uname_global} · Moderator Access</div></div></div>', unsafe_allow_html=True)
+
+        mod_tab1, mod_tab2 = st.tabs([
+            f"⏳ Pending Payments ({len(pending_mod)})",
+            f"👥 All Users ({len(all_users_mod)})"
         ])
 
-        with adm1:
-            if not pending_pays:
-                st.success("✨ No pending payments — all caught up!")
-            for pay in sorted(pending_pays, key=lambda x: x.get("submitted_at",""), reverse=True):
-                plan_c = PRICING.get(pay.get("plan",""),{}).get("color",TEXT2)
-                pid    = pay.get("id","")
-                h  = f'<div style="background:{CARD_BG};border:2px solid rgba(251,191,36,0.35);border-radius:16px;padding:1.25rem;margin-bottom:.75rem;position:relative;overflow:hidden">'
-                h += f'<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#fbbf24,{plan_c})"></div>'
-                h += f'<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.2rem"><div style="flex:1;min-width:200px">'
-                h += f'<div style="font-size:.95rem;font-weight:800;color:{TEXT1}">{pay.get("name","?")}</div>'
-                h += f'<div style="font-size:.72rem;color:{TEXT3};margin-bottom:.5rem">{pay.get("email","?")}</div>'
-                h += f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem">'
-                h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Plan</div><div style="font-weight:800;color:{plan_c}">{pay.get("plan","?").upper()}</div></div>'
-                h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Amount</div><div style="font-weight:800;color:#fbbf24">PKR {pay.get("amount",0):,.0f}</div></div>'
-                h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Method</div><div style="font-weight:600;color:{TEXT1}">{pay.get("payment_method","?").replace("_"," ").title()}</div></div>'
-                h += f'<div style="background:{BG3};border-radius:8px;padding:.4rem .6rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3}">Billing</div><div style="font-weight:600;color:{TEXT1}">{pay.get("billing","?").title()}</div></div>'
-                h += f'</div></div><div style="flex:1;min-width:180px">'
-                h += f'<div style="background:{BG3};border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem"><div style="font-size:.6rem;text-transform:uppercase;color:{TEXT3};margin-bottom:.2rem">Transaction ID</div><div style="font-size:.9rem;font-weight:700;color:#4ade80;font-family:monospace;word-break:break-all">{pay.get("txn_id","?")}</div></div>'
-                h += f'<div style="font-size:.7rem;color:{TEXT3}">📅 {pay.get("submitted_at","")[:16]}</div>'
-                h += f'<div style="font-size:.65rem;color:{TEXT3};font-family:monospace">{pid}</div>'
-                h += f'</div></div></div>'
-                st.markdown(h, unsafe_allow_html=True)
-                bc1, bc2, bc3 = st.columns([1,1,2])
-                with bc1:
-                    if st.button("✅ Approve", key=f"adm_approve_{pid}"):
+        with mod_tab1:
+            if not pending_mod:
+                st.success("✨ No pending payments!")
+            for pay in sorted(pending_mod, key=lambda x: x.get("submitted_at",""), reverse=True):
+                pid = pay.get("id","")
+                plan_c = PRICING.get(pay.get("plan",""),{}).get("color", TEXT2)
+                st.markdown(f"""
+                <div style="background:{CARD_BG};border:2px solid rgba(251,191,36,0.35);border-radius:16px;padding:1.25rem;margin-bottom:.75rem">
+                  <div style="font-weight:800;color:{TEXT1}">{pay.get("name","?")} — {pay.get("email","?")}</div>
+                  <div style="font-size:.8rem;color:{TEXT2};margin:.3rem 0">
+                    Plan: <b style="color:{plan_c}">{pay.get("plan","?").upper()}</b> ·
+                    Amount: <b style="color:#fbbf24">PKR {pay.get("amount",0):,.0f}</b> ·
+                    Method: {pay.get("payment_method","?").replace("_"," ").title()}
+                  </div>
+                  <div style="font-size:.72rem;color:{TEXT3}">Txn: {pay.get("txn_id","?")} · {pay.get("submitted_at","")[:16]} · {pid}</div>
+                </div>""", unsafe_allow_html=True)
+                mc1, mc2 = st.columns(2)
+                with mc1:
+                    if st.button("✅ Approve", key=f"mod_approve_{pid}"):
                         if approve_payment(pid):
-                            log_activity(pay.get("email",""), "plan_approved", f"{pay.get('plan','')} activated by admin")
-                            st.success(f"✅ {pay.get('name','?')} upgraded to {pay.get('plan','').upper()}!")
-                            st.rerun()
-                with bc2:
-                    if st.button("❌ Reject", key=f"adm_reject_{pid}"):
+                            log_activity(pay.get("email",""), "plan_approved", f"{pay.get('plan','')} approved by moderator")
+                            st.success(f"✅ Approved!"); st.rerun()
+                with mc2:
+                    if st.button("❌ Reject", key=f"mod_reject_{pid}"):
                         pays_rj = load_json(PAYMENTS_FILE)
                         if pid in pays_rj:
                             pays_rj[pid]["status"] = "rejected"
                             pays_rj[pid]["processed_at"] = now_str()
                             save_json(PAYMENTS_FILE, pays_rj)
-                            log_activity(pay.get("email",""), "plan_rejected", "rejected by admin")
-                            st.warning("❌ Payment rejected.")
-                            st.rerun()
-                with bc3:
-                    note_val = st.text_input("Admin note", placeholder="e.g. Txn verified ✓", key=f"adm_note_{pid}", label_visibility="collapsed")
-                    if note_val:
-                        pays_n = load_json(PAYMENTS_FILE)
-                        if pid in pays_n:
-                            pays_n[pid]["admin_note"] = note_val
-                            save_json(PAYMENTS_FILE, pays_n)
+                            log_activity(pay.get("email",""), "plan_rejected", "rejected by moderator")
+                            st.warning("❌ Rejected."); st.rerun()
                 st.markdown("---")
 
-        with adm2:
-            if not approved_pays:
-                st.info("No approved payments yet.")
-            else:
-                st.metric("Total Revenue", f"PKR {total_revenue:,.0f}", f"{len(approved_pays)} payments")
-                for pay in sorted(approved_pays, key=lambda x: x.get("processed_at",""), reverse=True):
-                    plan_c = PRICING.get(pay.get("plan",""),{}).get("color",TEXT2)
-                    h  = f'<div style="background:{CARD_BG};border:1px solid rgba(74,222,128,0.25);border-radius:12px;padding:1rem 1.25rem;margin-bottom:.5rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">'
-                    h += f'<span style="font-size:1.3rem">✅</span>'
-                    h += f'<div style="flex:1;min-width:150px"><div style="font-weight:700;color:{TEXT1}">{pay.get("name","?")}</div><div style="font-size:.72rem;color:{TEXT3}">{pay.get("email","?")}</div></div>'
-                    h += f'<span style="font-size:.7rem;font-weight:800;color:{plan_c};background:{plan_c}22;border:1px solid {plan_c}55;border-radius:6px;padding:.2rem .55rem">{pay.get("plan","?").upper()}</span>'
-                    h += f'<div style="font-weight:800;color:#fbbf24;font-family:monospace">PKR {pay.get("amount",0):,.0f}</div>'
-                    h += f'<div style="font-size:.7rem;color:{TEXT3}">✓ {pay.get("processed_at","")[:10]}</div>'
-                    h += f'<div style="font-size:.65rem;color:{TEXT3};font-family:monospace">{pay.get("id","")}</div></div>'
-                    st.markdown(h, unsafe_allow_html=True)
-
-        with adm3:
-            # ── Search + Filter Bar ──
-            sf1, sf2, sf3 = st.columns([3,1,1])
-            with sf1:
-                user_search = st.text_input("🔍 Search name / email", key="adm_user_search", placeholder="Search...")
-            with sf2:
-                filter_plan = st.selectbox("Plan", ["All","free","pro","enterprise"], key="adm_filter_plan")
-            with sf3:
-                filter_status = st.selectbox("Status", ["All","Active","Banned","Suspended","Verified","Unverified"], key="adm_filter_status")
-
-            for em, ud in sorted(all_users_db.items(), key=lambda x: x[1].get("signup_date",""), reverse=True):
-                # Search filter
-                if user_search and user_search.lower() not in em.lower() and user_search.lower() not in ud.get("name","").lower():
+        with mod_tab2:
+            mod_search = st.text_input("🔍 Search", key="mod_search", placeholder="Name or email...")
+            for em, ud in sorted(all_users_mod.items(), key=lambda x: x[1].get("signup_date",""), reverse=True):
+                if mod_search and mod_search.lower() not in em.lower() and mod_search.lower() not in ud.get("name","").lower():
                     continue
                 u_plan = get_user_plan(em)
-                # Plan filter
-                if filter_plan != "All" and u_plan != filter_plan:
-                    continue
-                # Status filter
-                is_banned     = ud.get("banned", False)
-                is_suspended  = ud.get("suspended", False)
-                is_deactivated= ud.get("deactivated", False)
-                is_verified   = ud.get("verified", False)
-                id_required   = ud.get("id_verification_required", False)
-                if filter_status == "Banned"     and not is_banned:     continue
-                if filter_status == "Suspended"  and not is_suspended:  continue
-                if filter_status == "Active"     and (is_banned or is_suspended or is_deactivated): continue
-                if filter_status == "Verified"   and not is_verified:   continue
-                if filter_status == "Unverified" and is_verified:       continue
+                u_pc   = PLAN_COLORS.get(u_plan, "#6b7280")
+                online_st = get_online_status(ud)
+                st.markdown(f"""
+                <div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:12px;padding:.9rem 1.25rem;margin-bottom:.4rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+                  <div style="flex:1;min-width:180px">
+                    <div style="font-weight:700;color:{TEXT1}">{ud.get("name","?")}</div>
+                    <div style="font-size:.72rem;color:{TEXT3}">{em}</div>
+                  </div>
+                  <span style="font-size:.75rem;font-weight:800;color:{u_pc}">{u_plan.upper()}</span>
+                  <span style="font-size:.75rem;color:{online_st['color']}">{online_st['dot']} {online_st['label']}</span>
+                  <div style="font-size:.68rem;color:{TEXT3}">Joined: {ud.get("signup_date","—")[:10]}</div>
+                </div>""", unsafe_allow_html=True)
 
-                u_pc   = PLAN_COLORS.get(u_plan,"#6b7280")
-                u_pi   = PLAN_ICONS.get(u_plan,"🌱")
-                u_hist = all_history.get(em,{})
-                login_count  = u_hist.get("login_count",0)
-                last_login   = ud.get("last_login") or u_hist.get("last_login","—")
-                join_date    = ud.get("signup_date","—")[:10]
-                admin_note   = ud.get("admin_note","")
-                suspend_until= ud.get("suspended_until","")
-                user_payments_list = [p for p in all_payments.values() if p.get("email")==em]
-                online_st    = get_online_status(ud)
-
-                # Status badges
-                status_badges = ""
-                if is_banned:      status_badges += f'<span style="background:rgba(248,113,113,0.15);color:#f87171;border:1px solid rgba(248,113,113,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">🚫 BANNED</span>'
-                if is_suspended:   status_badges += f'<span style="background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">⏸️ SUSPENDED</span>'
-                if is_deactivated: status_badges += f'<span style="background:rgba(107,114,128,0.15);color:#9ca3af;border:1px solid rgba(107,114,128,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">🔴 INACTIVE</span>'
-                if is_verified:    status_badges += f'<span style="background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.35);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">✔️ VERIFIED</span>'
-                if id_required:    status_badges += f'<span style="background:rgba(192,132,252,0.12);color:#c084fc;border:1px solid rgba(192,132,252,0.35);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">🪪 ID NEEDED</span>'
-                if ud.get("frozen"):   status_badges += f'<span style="background:rgba(96,165,250,0.15);color:#60a5fa;border:1px solid rgba(96,165,250,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">🧊 FROZEN</span>'
-                if ud.get("readonly"): status_badges += f'<span style="background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.65rem;font-weight:800;margin-left:.3rem">👁️ READ-ONLY</span>'
-
-                row_border = "#f87171" if is_banned else ("#60a5fa" if ud.get("frozen") else ("#fbbf24" if is_suspended else BORDER))
-
-                h  = f'<div style="background:{CARD_BG};border:1px solid {row_border};border-radius:14px;padding:1rem 1.25rem;margin-bottom:.5rem;position:relative;overflow:hidden">'
-                h += f'<div style="position:absolute;top:0;left:0;bottom:0;width:3px;background:{u_pc}"></div>'
-                h += f'<div style="display:flex;align-items:center;gap:.9rem;flex-wrap:wrap;margin-left:.3rem">'
-                h += f'<div style="position:relative;width:38px;height:38px;flex-shrink:0">'
-                h += f'<div style="width:38px;height:38px;border-radius:50%;background:{u_pc}20;border:2px solid {u_pc}60;display:flex;align-items:center;justify-content:center;font-size:1.1rem">{u_pi}</div>'
-                h += f'<div style="position:absolute;bottom:0;right:0;width:11px;height:11px;border-radius:50%;background:{online_st["color"]};border:2px solid {CARD_BG}"></div>'
-                h += f'</div>'
-                h += f'<div style="flex:1;min-width:180px">'
-                h += f'<div style="font-size:.92rem;font-weight:800;color:{TEXT1}">{ud.get("name","?")} {status_badges}</div>'
-                h += f'<div style="font-size:.72rem;color:{TEXT3};margin-top:.1rem">{em}</div>'
-                h += f'</div>'
-                h += f'<div style="display:flex;gap:1.25rem;flex-wrap:wrap;align-items:center">'
-                h += f'<div style="text-align:center"><div style="font-size:.85rem;font-weight:900;color:{u_pc}">{u_plan.upper()}</div><div style="font-size:.58rem;color:{TEXT3}">plan</div></div>'
-                h += f'<div style="text-align:center"><div style="font-size:.85rem;font-weight:900;color:#60a5fa">{login_count}</div><div style="font-size:.58rem;color:{TEXT3}">logins</div></div>'
-                h += f'<div style="text-align:center"><div style="font-size:.85rem;font-weight:900;color:{ACCENTY}">{len(user_payments_list)}</div><div style="font-size:.58rem;color:{TEXT3}">payments</div></div>'
-                h += f'<div style="text-align:center"><div style="font-size:.82rem;font-weight:800;color:{online_st["color"]}">{online_st["dot"]} {online_st["label"]}</div><div style="font-size:.58rem;color:{TEXT3}">last seen</div></div>'
-                h += f'<div style="text-align:right"><div style="font-size:.68rem;color:{TEXT3}">📅 Joined: {join_date}</div>'
-                h += f'<div style="font-size:.68rem;color:{TEXT3}">🕐 Last login: {str(last_login)[:16]}</div>'
-                h += f'</div></div></div>'
-                st.markdown(h, unsafe_allow_html=True)
-
-                with st.expander(f"⚙️ Manage — {ud.get('name','?')} ({em})", expanded=False):
-
-                    # ── TABS inside manage panel ──
-                    mt1, mt2, mt3, mt4, mt5, mt6 = st.tabs(["📋 Profile", "🔐 Account", "🧊 Freeze/Delete", "📧 Message", "📜 Activity", "💳 Payments"])
-
-                    # ── TAB 1: Profile + Plan ──
-                    with mt1:
-                        p1c1, p1c2, p1c3 = st.columns(3)
-                        with p1c1:
-                            np_ = st.selectbox("Set Plan", ["free","pro","enterprise"],
-                                index=["free","pro","enterprise"].index(u_plan), key=f"adm_plan_{em}")
-                            nm_ = st.number_input("Duration (months)", 1, 24, 1, key=f"adm_months_{em}")
-                            if st.button("💾 Apply Plan", key=f"adm_apply_{em}"):
-                                upgrade_user_plan(em, np_, int(nm_))
-                                log_activity(em, "plan_changed_by_admin", f"Set to {np_} for {nm_}mo")
-                                st.success(f"✅ Plan updated!"); st.rerun()
-                        with p1c2:
-                            st.markdown(f'<div style="font-size:.7rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">User Info</div>', unsafe_allow_html=True)
-                            st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">📧 <b>Email:</b> {em}</div>', unsafe_allow_html=True)
-                            st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">📅 <b>Joined:</b> {join_date}</div>', unsafe_allow_html=True)
-                            st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🕐 <b>Last Login:</b> {str(last_login)[:16]}</div>', unsafe_allow_html=True)
-                            st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🔢 <b>Total Logins:</b> {login_count}</div>', unsafe_allow_html=True)
-                            plain_pw = ud.get("password_plain", "—")
-                            st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🔑 <b>Password:</b> <span style="color:#4ade80;font-family:monospace">{plain_pw}</span></div>', unsafe_allow_html=True)
-                            expiry = ud.get("plan_expiry","—")
-                            st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">⏳ <b>Plan Expiry:</b> {expiry}</div>', unsafe_allow_html=True)
-                        with p1c3:
-                            new_note = st.text_area("📝 Admin Note", value=admin_note, key=f"adm_note_profile_{em}", height=100)
-                            if st.button("💾 Save Note", key=f"adm_save_note_{em}"):
-                                udb = load_json(USERS_FILE)
-                                udb[em]["admin_note"] = new_note
-                                save_json(USERS_FILE, udb)
-                                st.success("Note saved!"); st.rerun()
-
-                    # ── TAB 2: Account Controls ──
-                    with mt2:
-                        ac_c1, ac_c2, ac_c3 = st.columns(3)
-
-                        with ac_c1:
-                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">🚫 Ban / Unban</div>', unsafe_allow_html=True)
-                            if is_banned:
-                                if st.button("✅ Unban User", key=f"adm_unban_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["banned"] = False
-                                    udb[em]["banned_at"] = None
-                                    udb[em]["ban_reason"] = ""
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "unbanned", "Unbanned by admin")
-                                    st.success("✅ User unbanned!"); st.rerun()
-                            else:
-                                ban_reason = st.text_input("Ban reason", key=f"adm_ban_reason_{em}", placeholder="e.g. Spam, abuse...")
-                                if st.button("🚫 Ban User", key=f"adm_ban_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["banned"] = True
-                                    udb[em]["banned_at"] = now_str()
-                                    udb[em]["ban_reason"] = ban_reason
-                                    save_json(USERS_FILE, udb)
-                                    # Invalidate all tokens
-                                    tks = load_json(TOKENS_FILE)
-                                    tks = {t:v for t,v in tks.items() if v.get("email") != em}
-                                    save_json(TOKENS_FILE, tks)
-                                    log_activity(em, "banned", f"Banned: {ban_reason}")
-                                    st.error(f"🚫 User banned!"); st.rerun()
-
-                        with ac_c2:
-                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">⏸️ Suspend</div>', unsafe_allow_html=True)
-                            if is_suspended:
-                                st.markdown(f'<div style="font-size:.75rem;color:{ACCENTY}">Suspended until: {suspend_until}</div>', unsafe_allow_html=True)
-                                if st.button("▶️ Lift Suspension", key=f"adm_unsuspend_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["suspended"] = False
-                                    udb[em]["suspended_until"] = ""
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "unsuspended", "Suspension lifted by admin")
-                                    st.success("✅ Suspension lifted!"); st.rerun()
-                            else:
-                                sus_days = st.number_input("Suspend for (days)", 1, 365, 7, key=f"adm_sus_days_{em}")
-                                sus_reason = st.text_input("Reason", key=f"adm_sus_reason_{em}", placeholder="e.g. Policy violation")
-                                if st.button("⏸️ Suspend", key=f"adm_suspend_{em}"):
-                                    until_dt = (datetime.now() + timedelta(days=int(sus_days))).strftime("%Y-%m-%d")
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["suspended"] = True
-                                    udb[em]["suspended_until"] = until_dt
-                                    udb[em]["suspend_reason"] = sus_reason
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "suspended", f"{sus_days}d: {sus_reason}")
-                                    st.warning(f"⏸️ Suspended for {sus_days} days!"); st.rerun()
-
-                        with ac_c3:
-                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">🔧 Other Controls</div>', unsafe_allow_html=True)
-
-                            # Activate / Deactivate
-                            if is_deactivated:
-                                if st.button("🟢 Activate Account", key=f"adm_activate_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["deactivated"] = False
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "activated", "Reactivated by admin")
-                                    st.success("✅ Activated!"); st.rerun()
-                            else:
-                                if st.button("🔴 Deactivate Account", key=f"adm_deactivate_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["deactivated"] = True
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "deactivated", "Deactivated by admin")
-                                    st.warning("🔴 Account deactivated!"); st.rerun()
-
-                            # Verify / Unverify
-                            if is_verified:
-                                if st.button("❌ Remove Verification", key=f"adm_unverify_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["verified"] = False
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "unverified", "Verification removed")
-                                    st.warning("Verification removed!"); st.rerun()
-                            else:
-                                if st.button("✔️ Mark as Verified", key=f"adm_verify_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["verified"] = True
-                                    udb[em]["verified_at"] = now_str()
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "verified", "Verified by admin")
-                                    st.success("✔️ User verified!"); st.rerun()
-
-                            # ID Verification required
-                            if id_required:
-                                if st.button("🔓 Remove ID Requirement", key=f"adm_no_id_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["id_verification_required"] = False
-                                    save_json(USERS_FILE, udb)
-                                    st.success("ID requirement removed!"); st.rerun()
-                            else:
-                                if st.button("🪪 Require ID Verification", key=f"adm_req_id_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["id_verification_required"] = True
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "id_required", "ID verification required by admin")
-                                    st.warning("🪪 ID verification required!"); st.rerun()
-
-                            # Reset Password
-                            st.markdown("---")
-                            new_pw = st.text_input("🔑 New Password", type="password", key=f"adm_new_pw_{em}", placeholder="Leave blank to skip")
-                            if st.button("🔑 Reset Password", key=f"adm_reset_pw_{em}"):
-                                if new_pw and len(new_pw) >= 6:
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["password_hash"] = hash_password(new_pw)
-                                    udb[em]["password_plain"] = new_pw
-                                    save_json(USERS_FILE, udb)
-                                    # Invalidate all tokens so user must re-login
-                                    tks = load_json(TOKENS_FILE)
-                                    tks = {t:v for t,v in tks.items() if v.get("email") != em}
-                                    save_json(TOKENS_FILE, tks)
-                                    log_activity(em, "password_reset", "Password reset by admin")
-                                    st.success("✅ Password reset! User logged out."); st.rerun()
-                                else:
-                                    st.error("Min 6 characters required.")
-
-                    # ── TAB 3: Freeze / Read-Only / Delete ──
-                    with mt3:
-                        is_frozen   = ud.get("frozen", False)
-                        is_readonly_u = ud.get("readonly", False)
-
-                        fr_c1, fr_c2, fr_c3 = st.columns(3)
-
-                        with fr_c1:
-                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:#60a5fa;margin-bottom:.5rem">🧊 Freeze Account</div>', unsafe_allow_html=True)
-                            st.caption("Instant block — user sees frozen screen, cannot do anything.")
-                            if is_frozen:
-                                st.markdown(f'<div style="background:rgba(96,165,250,0.10);border:1px solid rgba(96,165,250,0.35);border-radius:8px;padding:.6rem .9rem;font-size:.75rem;color:#60a5fa;margin-bottom:.5rem">🧊 Frozen since: {ud.get("frozen_at","—")[:16]}<br>Reason: {ud.get("frozen_reason","—")}</div>', unsafe_allow_html=True)
-                                if st.button("🔓 Unfreeze Account", key=f"adm_unfreeze_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["frozen"] = False
-                                    udb[em]["frozen_at"] = ""
-                                    udb[em]["frozen_reason"] = ""
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "unfrozen", "Account unfrozen by admin")
-                                    st.success("✅ Account unfrozen!"); st.rerun()
-                            else:
-                                freeze_reason = st.text_input("Freeze reason", key=f"adm_freeze_reason_{em}", placeholder="e.g. Suspicious activity")
-                                if st.button("🧊 Freeze Instantly", key=f"adm_freeze_{em}", type="primary"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["frozen"] = True
-                                    udb[em]["frozen_at"] = now_str()
-                                    udb[em]["frozen_reason"] = freeze_reason
-                                    save_json(USERS_FILE, udb)
-                                    # Invalidate all tokens
-                                    tks = load_json(TOKENS_FILE)
-                                    tks = {t:v for t,v in tks.items() if v.get("email") != em}
-                                    save_json(TOKENS_FILE, tks)
-                                    log_activity(em, "frozen", f"Frozen: {freeze_reason}")
-                                    st.info("🧊 Account frozen instantly!"); st.rerun()
-
-                        with fr_c2:
-                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{ACCENTY};margin-bottom:.5rem">👁️ Read-Only Mode</div>', unsafe_allow_html=True)
-                            st.caption("User can login and view but cannot train, upload, or take any action.")
-                            if is_readonly_u:
-                                st.markdown(f'<div style="background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.35);border-radius:8px;padding:.6rem .9rem;font-size:.75rem;color:{ACCENTY};margin-bottom:.5rem">👁️ Currently in Read-Only mode</div>', unsafe_allow_html=True)
-                                if st.button("✅ Restore Full Access", key=f"adm_readonly_off_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["readonly"] = False
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "readonly_removed", "Full access restored by admin")
-                                    st.success("✅ Full access restored!"); st.rerun()
-                            else:
-                                ro_reason = st.text_input("Reason (optional)", key=f"adm_ro_reason_{em}", placeholder="e.g. Payment pending")
-                                if st.button("👁️ Set Read-Only", key=f"adm_readonly_on_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["readonly"] = True
-                                    udb[em]["readonly_reason"] = ro_reason
-                                    udb[em]["readonly_at"] = now_str()
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "readonly_set", f"Read-only: {ro_reason}")
-                                    st.warning("👁️ User set to read-only!"); st.rerun()
-
-                        with fr_c3:
-                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{ACCENTR};margin-bottom:.5rem">🗑️ Delete Account</div>', unsafe_allow_html=True)
-                            st.caption("⚠️ Permanent! All data, history, and payments will be deleted forever.")
-                            confirm_del = st.text_input("Type email to confirm", key=f"adm_del_confirm_{em}", placeholder=f"{em}")
-                            if st.button("🗑️ DELETE PERMANENTLY", key=f"adm_delete_{em}"):
-                                if confirm_del.strip() == em:
-                                    # Delete from all collections
-                                    udb = load_json(USERS_FILE)
-                                    udb.pop(em, None)
-                                    save_json(USERS_FILE, udb)
-
-                                    hdb = load_json(HISTORY_FILE)
-                                    hdb.pop(em, None)
-                                    save_json(HISTORY_FILE, hdb)
-
-                                    # Delete tokens
-                                    tks = load_json(TOKENS_FILE)
-                                    tks = {t:v for t,v in tks.items() if v.get("email") != em}
-                                    save_json(TOKENS_FILE, tks)
-
-                                    # Delete payments
-                                    pays = load_json(PAYMENTS_FILE)
-                                    pays = {k:v for k,v in pays.items() if v.get("email") != em}
-                                    save_json(PAYMENTS_FILE, pays)
-
-                                    st.error(f"🗑️ Account {em} permanently deleted!")
-                                    st.rerun()
-                                else:
-                                    st.error("❌ Email doesn't match — not deleted.")
-
-                    # ── TAB 4: Send Email ──
-                    with mt4:
-                        st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin-bottom:.75rem">Send a direct message to <b>{ud.get("name","?")}</b> at <b>{em}</b></div>', unsafe_allow_html=True)
-                        msg_subject = st.text_input("Subject", key=f"adm_msg_subj_{em}", placeholder="e.g. Account Notice")
-                        msg_body    = st.text_area("Message", key=f"adm_msg_body_{em}", height=150, placeholder="Type your message here...")
-                        if st.button("📧 Send Email", key=f"adm_send_msg_{em}"):
-                            if msg_subject and msg_body:
-                                # Temporarily override NOTIFY_TO to send to this user
-                                try:
-                                    msg = MIMEMultipart("alternative")
-                                    msg["Subject"] = f"[DataForge] {msg_subject}"
-                                    msg["From"]    = SMTP_USER
-                                    msg["To"]      = em
-                                    html_body = f"""<html><body style="font-family:Inter,sans-serif;background:#0a0a0a;color:#e5e7eb;padding:24px">
-                                    <div style="max-width:520px;margin:auto;background:#111;border:1px solid #222;border-radius:16px;padding:28px">
-                                    <div style="font-size:1.5rem;font-weight:900;color:#4ade80;margin-bottom:1rem">⚡ DataForge ML Studio</div>
-                                    <div style="font-size:1rem;font-weight:700;color:#f9fafb;margin-bottom:.75rem">Hi {ud.get("name","there")},</div>
-                                    <div style="font-size:.9rem;color:#d1fae5;line-height:1.7;white-space:pre-wrap">{msg_body}</div>
-                                    <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #222;font-size:.75rem;color:#6b7280">DataForge ML Studio · This is an official communication from admin.</div>
-                                    </div></body></html>"""
-                                    msg.attach(MIMEText(msg_body, "plain", "utf-8"))
-                                    msg.attach(MIMEText(html_body, "html", "utf-8"))
-                                    sent = False
-                                    for port, use_ssl in [(465, True), (587, False)]:
-                                        try:
-                                            if use_ssl:
-                                                with smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=10) as srv:
-                                                    srv.login(SMTP_USER, SMTP_PASS)
-                                                    srv.sendmail(SMTP_USER, em, msg.as_string())
-                                            else:
-                                                with smtplib.SMTP("smtp.gmail.com", port, timeout=10) as srv:
-                                                    srv.ehlo(); srv.starttls(); srv.ehlo()
-                                                    srv.login(SMTP_USER, SMTP_PASS)
-                                                    srv.sendmail(SMTP_USER, em, msg.as_string())
-                                            sent = True; break
-                                        except: continue
-                                    if sent:
-                                        log_activity(em, "admin_email_sent", msg_subject)
-                                        st.success(f"📧 Email sent to {em}!")
-                                    else:
-                                        st.error("❌ Email failed — check SMTP credentials.")
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-                            else:
-                                st.error("Subject aur message dono required hain.")
-
-                    # ── TAB 5: Login + Activity History ──
-                    with mt5:
-                        activity_log  = u_hist.get("activity_log", [])
-                        training_log  = u_hist.get("training_log", [])
-
-                        h4c1, h4c2 = st.columns(2)
-                        with h4c1:
-                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">📜 Login History (last 10)</div>', unsafe_allow_html=True)
-                            login_events = [a for a in activity_log if a.get("action") in ["signin","signup"]][-10:][::-1]
-                            if not login_events:
-                                st.caption("No login history.")
-                            for ev in login_events:
-                                st.markdown(f'<div style="font-size:.75rem;color:{TEXT2};padding:.3rem 0;border-bottom:1px solid {BORDER}">🔑 {ev.get("time","")[:16]} — {ev.get("detail","login")}</div>', unsafe_allow_html=True)
-
-                        with h4c2:
-                            st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">🤖 Training History (last 10)</div>', unsafe_allow_html=True)
-                            if not training_log:
-                                st.caption("No training history.")
-                            for tr in training_log[-10:][::-1]:
-                                st.markdown(f'<div style="font-size:.75rem;color:{TEXT2};padding:.3rem 0;border-bottom:1px solid {BORDER}">{"🎯" if tr.get("problem_type")=="classification" else "📈"} {tr.get("time","")[:10]} — {tr.get("best_model","?")} · {tr.get("score",0):.4f}</div>', unsafe_allow_html=True)
-
-                        st.markdown(f'<div style="font-size:.72rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin:.75rem 0 .5rem">📋 All Activity (last 20)</div>', unsafe_allow_html=True)
-                        for ev in activity_log[-20:][::-1]:
-                            action_color = "#4ade80" if "approved" in ev.get("action","") else "#f87171" if "banned" in ev.get("action","") else TEXT2
-                            st.markdown(f'<div style="font-size:.73rem;color:{action_color};padding:.25rem 0;border-bottom:1px solid {BORDER}">{ev.get("time","")[:16]} · <b>{ev.get("action","")}</b> — {ev.get("detail","")}</div>', unsafe_allow_html=True)
-
-                        if st.button("🗑️ Clear Training History", key=f"adm_clear_hist_{em}"):
-                            hdb = load_json(HISTORY_FILE)
-                            if em in hdb:
-                                hdb[em]["training_log"] = []
-                                save_json(HISTORY_FILE, hdb)
-                                log_activity(em, "history_cleared", "Training history cleared by admin")
-                                st.success("Training history cleared!"); st.rerun()
-
-                    # ── TAB 6: Payment Attempts ──
-                    with mt6:
-                        all_user_pays = sorted(user_payments_list, key=lambda x: x.get("submitted_at",""), reverse=True)
-                        if not all_user_pays:
-                            st.info("No payment attempts from this user.")
-                        else:
-                            st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin-bottom:.75rem"><b>{len(all_user_pays)}</b> payment attempt(s) found</div>', unsafe_allow_html=True)
-                            for pay in all_user_pays:
-                                status = pay.get("status","pending")
-                                sc = "#fbbf24" if status=="pending" else "#4ade80" if status=="approved" else "#f87171"
-                                plan_c2 = PRICING.get(pay.get("plan",""),{}).get("color",TEXT2)
-                                h5  = f'<div style="background:{BG3};border:1px solid {sc}44;border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem">'
-                                h5 += f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">'
-                                h5 += f'<div><span style="font-size:.7rem;font-weight:800;color:{plan_c2};background:{plan_c2}22;border:1px solid {plan_c2}44;border-radius:5px;padding:.1rem .45rem">{pay.get("plan","?").upper()}</span> <span style="font-size:.72rem;color:{TEXT2}">PKR {pay.get("amount",0):,.0f} · {pay.get("payment_method","?").replace("_"," ").title()}</span></div>'
-                                h5 += f'<span style="font-size:.7rem;font-weight:800;color:{sc}">{status.upper()}</span>'
-                                h5 += f'</div>'
-                                h5 += f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.3rem">Txn: {pay.get("txn_id","?")} · {pay.get("submitted_at","")[:16]} · {pay.get("id","")}</div>'
-                                h5 += f'</div>'
-                                st.markdown(h5, unsafe_allow_html=True)
-
-        with adm4:
-            st.markdown(f'<div style="font-size:1rem;font-weight:800;color:{TEXT1};margin-bottom:1rem">📊 Live Activity Monitor</div>', unsafe_allow_html=True)
-
-            # ── Summary Stats ──
-            all_activity = []
-            for em_a, hist_a in all_history.items():
-                for ev in hist_a.get("activity_log", []):
-                    all_activity.append({**ev, "email": em_a, "name": all_users_db.get(em_a, {}).get("name","?")})
-            all_activity = sorted(all_activity, key=lambda x: x.get("time",""), reverse=True)
-
-            # Stats
-            _today_acts = [a for a in all_activity if a.get("time","")[:10] == _today_str]
-            _logins_today = sum(1 for a in _today_acts if a.get("action") == "signin")
-            _signups_today = sum(1 for a in _today_acts if a.get("action") == "signup")
-            _trainings_today = sum(1 for a in _today_acts if a.get("action") == "training_complete")
-            _frozen_count = sum(1 for ud in all_users_db.values() if ud.get("frozen"))
-            _readonly_count = sum(1 for ud in all_users_db.values() if ud.get("readonly"))
-            _online_count = sum(1 for ud in all_users_db.values() if get_online_status(ud)["online"])
-
-            am1,am2,am3,am4,am5,am6,am7 = st.columns(7)
-            for col,lbl,val,color in [
-                (am1,"🟢 Online Now",_online_count,"#4ade80"),
-                (am2,"🔑 Logins Today",_logins_today,"#60a5fa"),
-                (am3,"✨ Signups Today",_signups_today,"#4ade80"),
-                (am4,"🤖 Trainings Today",_trainings_today,"#c084fc"),
-                (am5,"🧊 Frozen",_frozen_count,"#60a5fa"),
-                (am6,"👁️ Read-Only",_readonly_count,"#fbbf24"),
-                (am7,"📋 Total Events",len(all_activity),"#9ca3af"),
-            ]:
-                with col:
-                    st.markdown(f'<div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:12px;padding:.75rem 1rem;text-align:center"><div style="font-size:.65rem;color:{TEXT3};text-transform:uppercase;font-weight:700">{lbl}</div><div style="font-size:1.6rem;font-weight:900;color:{color}">{val}</div></div>', unsafe_allow_html=True)
-
-            st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-
-            # ── Frozen/ReadOnly users quick list ──
-            frozen_users = [(em, ud) for em, ud in all_users_db.items() if ud.get("frozen") or ud.get("readonly")]
-            if frozen_users:
-                st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">⚠️ Restricted Accounts</div>', unsafe_allow_html=True)
-                for em_f, ud_f in frozen_users:
-                    status_f = "🧊 FROZEN" if ud_f.get("frozen") else "👁️ READ-ONLY"
-                    color_f  = "#60a5fa" if ud_f.get("frozen") else "#fbbf24"
-                    st.markdown(f'<div style="background:{CARD_BG};border:1px solid {color_f}44;border-radius:10px;padding:.6rem 1rem;margin-bottom:.3rem;display:flex;justify-content:space-between;align-items:center"><div><b style="color:{TEXT1}">{ud_f.get("name","?")} </b><span style="font-size:.72rem;color:{TEXT3}">{em_f}</span></div><span style="font-size:.72rem;font-weight:800;color:{color_f}">{status_f}</span></div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-
-            # ── Live Activity Feed ──
-            am_search = st.text_input("🔍 Filter by email or action", key="am_search", placeholder="e.g. training, signin...")
-            st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin:.5rem 0">📋 Recent Activity (last 100)</div>', unsafe_allow_html=True)
-
-            shown = 0
-            for ev in all_activity[:200]:
-                if am_search and am_search.lower() not in ev.get("email","").lower() and am_search.lower() not in ev.get("action","").lower():
-                    continue
-                action = ev.get("action","")
-                a_color = "#4ade80" if action in ["signup","plan_approved","verified"] else \
-                          "#f87171" if action in ["banned","frozen","deleted","plan_rejected"] else \
-                          "#fbbf24" if action in ["suspended","readonly_set"] else \
-                          "#60a5fa" if action == "signin" else \
-                          "#c084fc" if action == "training_complete" else TEXT3
-                st.markdown(f'<div style="display:flex;gap:.75rem;align-items:center;padding:.3rem 0;border-bottom:1px solid {BORDER}"><span style="font-size:.68rem;color:{TEXT3};min-width:110px">{ev.get("time","")[:16]}</span><span style="font-size:.72rem;font-weight:700;color:{a_color};min-width:130px">{action}</span><span style="font-size:.72rem;color:{TEXT2};min-width:160px">{ev.get("name","?")} ({ev.get("email","")[:20]})</span><span style="font-size:.7rem;color:{TEXT3}">{ev.get("detail","")[:50]}</span></div>', unsafe_allow_html=True)
-                shown += 1
-                if shown >= 100: break
-
-        with adm5:
-            email_log = load_json("dataforge_email_log")
-            if not email_log:
-                st.info("No email events logged yet.")
-            else:
-                ec1, ec2 = st.columns(2)
-                with ec1:
-                    st.download_button("📥 Export CSV",
-                        pd.DataFrame([{"ts":ts,**{k:str(v)[:80] for k,v in e.items()}} for ts,e in sorted(email_log.items(),reverse=True)[:50]]).to_csv(index=False),
-                        "email_log.csv","text/csv", key="adm_dl_email")
-                with ec2:
-                    if st.button("🗑️ Clear Log", key="adm_clear_email"):
-                        save_json("dataforge_email_log",{})
-                        st.success("Cleared!"); st.rerun()
-
-                for ts, entry in sorted(email_log.items(), reverse=True)[:50]:
-                    has_err = "error" in entry
-                    is_ok   = entry.get("status") == "sent_ok"
-                    icon    = "✅" if is_ok else ("❌" if has_err else "📧")
-                    col     = "#4ade80" if is_ok else ("#f87171" if has_err else "#fbbf24")
-                    bdr     = "rgba(248,113,113,0.30)" if has_err else BORDER
-                    h  = f'<div style="background:{CARD_BG};border:1px solid {bdr};border-radius:10px;padding:.75rem 1rem;margin-bottom:.35rem;display:flex;gap:.75rem;align-items:flex-start">'
-                    h += f'<span style="font-size:1rem;flex-shrink:0">{icon}</span>'
-                    h += f'<div style="flex:1;min-width:0"><div style="font-size:.8rem;font-weight:700;color:{col};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{entry.get("subject","(no subject)")}</div>'
-                    h += f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.1rem">{ts}</div>'
-                    if entry.get("body_preview"):
-                        preview = entry["body_preview"].replace("\n","<br>").strip()
-                        h += f'<div style="font-size:.72rem;color:{TEXT2};margin-top:.3rem;background:rgba(255,255,255,0.04);border-radius:6px;padding:.35rem .6rem;font-family:monospace;white-space:pre-wrap">{preview}</div>'
-                    if has_err:
-                        h += f'<div style="font-size:.72rem;color:#f87171;margin-top:.25rem;background:rgba(248,113,113,0.07);border-radius:6px;padding:.25rem .5rem">Error: {entry.get("error","")}</div>'
-                    if entry.get("note"):
-                        h += f'<div style="font-size:.7rem;color:#fbbf24;margin-top:.2rem;background:rgba(251,191,36,0.07);border-radius:6px;padding:.25rem .5rem">{entry["note"][:200]}</div>'
-                    h += '</div></div>'
-                    st.markdown(h, unsafe_allow_html=True)
-
-st.markdown("---")
+st.markdown("")
 
 # ─────────────────────────────────────────────
 #  MAIN TABS
