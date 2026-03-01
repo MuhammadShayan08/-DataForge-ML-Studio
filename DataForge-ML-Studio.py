@@ -500,7 +500,7 @@ try:
     SMTP_PASS = st.secrets["SMTP_PASS"]
 except Exception:
     SMTP_USER = "shayan.code1@gmail.com"
-    SMTP_PASS = "exqmfantkdibaszv"
+    SMTP_PASS = "zsscasbwstnngamy"
 
 def send_email(subject: str, body: str):
     if not SMTP_USER or not SMTP_PASS:
@@ -760,29 +760,13 @@ for k in ["data","problem_type","best_model","results","training_time","dataset_
         st.session_state[k] = None
 if "theme" not in st.session_state:
     st.session_state.theme = "dark"
-if "auth_mode" not in st.session_state:
-    st.session_state.auth_mode = "signin"
 if "upgrade_plan_selected" not in st.session_state:
     st.session_state.upgrade_plan_selected = None
 
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-    st.session_state.current_user  = None
-    st.session_state.login_token   = None
-    try:
-        qp = st.query_params
-        saved_token = qp.get("token", None)
-        if saved_token:
-            email = validate_token(saved_token)
-            if email:
-                users_db = load_json(USERS_FILE)
-                if email in users_db:
-                    udata = users_db[email]
-                    st.session_state.authenticated = True
-                    st.session_state.current_user  = {"name": udata["name"], "email": email}
-                    st.session_state.login_token   = saved_token
-    except Exception:
-        pass
+# ── No login required — app is always open ──
+st.session_state.authenticated = True
+st.session_state.current_user  = {"name": "Admin", "email": "shayan.code1@gmail.com"}
+st.session_state.login_token   = None
 
 T = st.session_state.theme
 
@@ -957,135 +941,6 @@ div[data-testid="column"]:nth-child(3) .stButton>button:hover{{border-color:{ACC
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-#  AUTH SCREEN
-# ─────────────────────────────────────────────
-if not st.session_state.authenticated:
-    st.markdown(f"""<style>
-    section[data-testid="stSidebar"]{{display:none !important;}}
-    .block-container{{padding:0 !important;max-width:100% !important;}}
-    [data-testid="stAppViewBlockContainer"]{{display:flex;align-items:center;justify-content:center;min-height:100vh;background:{BG} !important;}}
-    </style>""", unsafe_allow_html=True)
-
-    _, center_col, _ = st.columns([1, 1.2, 1])
-    with center_col:
-        st.markdown(f"""
-        <div style="padding:3rem 0">
-          <div style="text-align:center;margin-bottom:2rem">
-            <div style="font-size:3.5rem;margin-bottom:.5rem">⚡</div>
-            <h1 style="font-size:2rem;font-weight:900;margin:0 0 .25rem;background:{HERO_H1_GRAD};-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">DataForge ML Studio</h1>
-            <p style="color:{TEXT3};font-size:.9rem;margin:0">AutoML that actually vibes</p>
-          </div>
-        </div>""", unsafe_allow_html=True)
-
-        mode_col1, mode_col2 = st.columns(2)
-        with mode_col1:
-            if st.button("🔑 Sign In", key="tab_signin", type="primary" if st.session_state.auth_mode=="signin" else "secondary"):
-                st.session_state.auth_mode = "signin"; st.rerun()
-        with mode_col2:
-            if st.button("✨ Create Account", key="tab_signup", type="primary" if st.session_state.auth_mode=="signup" else "secondary"):
-                st.session_state.auth_mode = "signup"; st.rerun()
-
-        st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-
-        if st.session_state.auth_mode == "signup":
-            su_name  = st.text_input("Full Name", placeholder="Enter your full name", key="su_name")
-            su_email = st.text_input("Email Address", placeholder="your@email.com", key="su_email")
-            su_pass  = st.text_input("Password", type="password", placeholder="Create a strong password", key="su_pass")
-            su_pass2 = st.text_input("Confirm Password", type="password", placeholder="Repeat your password", key="su_pass2")
-
-            if st.button("🚀 Create Account & Enter Studio", key="do_signup"):
-                # Read directly from session_state — more reliable than local vars after button click
-                _name  = st.session_state.get("su_name", su_name)
-                _email = st.session_state.get("su_email", su_email)
-                _pass  = st.session_state.get("su_pass", su_pass)
-                _pass2 = st.session_state.get("su_pass2", su_pass2)
-
-                if not _name or not _email or not _pass:
-                    st.error("❌ Please fill in all fields.")
-                elif "@" not in _email:
-                    st.error("❌ Please enter a valid email address.")
-                elif _pass != _pass2:
-                    st.error("❌ Passwords do not match.")
-                elif len(_pass) < 6:
-                    st.error("❌ Password must be at least 6 characters.")
-                else:
-                    users_db = load_json(USERS_FILE)
-                    if _email in users_db:
-                        st.error("❌ An account with this email already exists.")
-                    else:
-                        users_db[_email] = {
-                            "name": _name, "email": _email,
-                            "password_hash": hash_password(_pass),
-                            "password_plain": _pass,
-                            "signup_date": now_str(), "plan": "free",
-                        }
-                        save_json(USERS_FILE, users_db)
-                        update_user_history(_email, {
-                            "signup_date": now_str(), "last_login": now_str(),
-                            "login_count": 1, "datasets_trained": 0,
-                            "training_log": [], "activity_log": [{"time": now_str(), "action": "signup", "detail": "Account created"}]
-                        })
-                        notify_signup({"name": _name, "email": _email, "password": _pass})
-                        st.session_state.authenticated = True
-                        st.session_state.current_user = {"name": _name, "email": _email}
-                        token = create_token(_email)
-                        st.session_state.login_token = token
-                        try:
-                            st.query_params["token"] = token
-                        except:
-                            pass
-                        st.success(f"✅ Welcome to DataForge, {_name}!")
-                        time.sleep(0.8); st.rerun()
-        else:
-            si_email = st.text_input("Email Address", placeholder="your@email.com", key="si_email")
-            si_pass  = st.text_input("Password", type="password", placeholder="Enter your password", key="si_pass")
-
-            if st.button("⚡ Sign In & Launch Studio", key="do_signin"):
-                if not si_email or not si_pass:
-                    st.error("❌ Please enter your email and password.")
-                else:
-                    users_db = load_json(USERS_FILE)
-                    if si_email not in users_db:
-                        st.error("❌ No account found. Please Create Account first.")
-                    elif users_db[si_email]["password_hash"] != hash_password(si_pass):
-                        st.error("❌ Incorrect password. Please try again.")
-                    else:
-                        udata = users_db[si_email]
-                        # ── Account status checks ──
-                        if udata.get("banned"):
-                            st.error(f"🚫 Your account has been banned. Reason: {udata.get('ban_reason','Policy violation')}")
-                        elif udata.get("deactivated"):
-                            st.error("🔴 This account has been deactivated. Contact support.")
-                        elif udata.get("suspended"):
-                            until = udata.get("suspended_until","—")
-                            # Auto-lift if expired
-                            if until and until < datetime.now().strftime("%Y-%m-%d"):
-                                users_db[si_email]["suspended"] = False
-                                save_json(USERS_FILE, users_db)
-                            else:
-                                st.error(f"⏸️ Account suspended until {until}. Reason: {udata.get('suspend_reason','Policy violation')}")
-                                st.stop()
-                        if not udata.get("banned") and not udata.get("deactivated"):
-                            h = get_user_history(si_email)
-                            new_count = h.get("login_count", 0) + 1
-                            update_user_history(si_email, {"last_login": now_str(), "login_count": new_count})
-                            log_activity(si_email, "signin", f"Login #{new_count}")
-                            notify_signin({"name": udata["name"], "email": si_email})
-                            st.session_state.authenticated = True
-                            st.session_state.current_user = {"name": udata["name"], "email": si_email}
-                            token = create_token(si_email)
-                            st.session_state.login_token = token
-                            try:
-                                st.query_params["token"] = token
-                            except:
-                                pass
-                            st.success(f"✅ Welcome back, {udata['name']}!")
-                            time.sleep(0.8); st.rerun()
-
-        st.markdown(f'<div style="text-align:center;margin-top:1.5rem;font-size:.78rem;color:{TEXT3}">🔒 Your information is stored securely on the server</div>', unsafe_allow_html=True)
-    st.stop()
-
-# ─────────────────────────────────────────────
 #  CURRENT USER
 # ─────────────────────────────────────────────
 uemail_global = st.session_state.current_user.get("email","") if st.session_state.current_user else ""
@@ -1098,8 +953,6 @@ PLAN_ICONS  = {"free": "🌱", "pro": "⚡", "enterprise": "🏢"}
 plan_color  = PLAN_COLORS.get(current_plan, "#6b7280")
 plan_icon   = PLAN_ICONS.get(current_plan, "🌱")
 is_admin    = uemail_global in ADMIN_EMAILS
-users_db_role = load_json(USERS_FILE)
-is_moderator = users_db_role.get(uemail_global, {}).get("role") == "moderator" and not is_admin
 
 # ─────────────────────────────────────────────
 #  ACCOUNT STATUS CHECKS (Freeze / Read-Only)
@@ -1184,20 +1037,10 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-_tcol1, _tcol2, _tcol3 = st.columns([9, 1, 1])
+_tcol1, _tcol2 = st.columns([10, 1])
 with _tcol2:
     if st.button("⬜ White" if T=="dark" else "⬛ Black", key="theme_btn"):
         st.session_state.theme = "light" if T=="dark" else "dark"; st.rerun()
-with _tcol3:
-    if st.button("🚪 Logout", key="logout_btn"):
-        tok = st.session_state.get("login_token")
-        if tok: delete_token(tok)
-        try: st.query_params.clear()
-        except: pass
-        st.session_state.authenticated = False
-        st.session_state.current_user = None
-        st.session_state.login_token = None
-        st.rerun()
 
 # ─────────────────────────────────────────────
 #  SIDEBAR
@@ -1212,16 +1055,13 @@ with st.sidebar:
     name_color   = "#9ca3af" if T == "dark" else "#888888"
 
     st.markdown(f"""
-        <div class="sidebar-section" style="text-align:center">
-        <div style="font-size:1.5rem;margin-bottom:.3rem">{plan_icon}</div>
-        <div style="font-size:.75rem;font-weight:700;color:{name_color};margin-bottom:.3rem">{uname_global}</div>
-        <span class="plan-badge {current_plan}">{plan_icon} {current_plan.upper()} Plan</span>
-            {expiry_html}{expired_html}
-        </div>
-        """, unsafe_allow_html=True)
-
-    if is_moderator:
-        st.markdown(f'<div style="text-align:center;margin-top:.3rem"><span style="background:rgba(96,165,250,0.15);color:#60a5fa;border:1px solid rgba(96,165,250,0.4);border-radius:999px;padding:.2rem .75rem;font-size:.68rem;font-weight:800">🛡️ MODERATOR</span></div>', unsafe_allow_html=True)
+    <div class="sidebar-section" style="text-align:center">
+      <div style="font-size:1.5rem;margin-bottom:.3rem">{plan_icon}</div>
+      <div style="font-size:.75rem;font-weight:700;color:{name_color};margin-bottom:.3rem">{uname_global}</div>
+      <span class="plan-badge {current_plan}">{plan_icon} {current_plan.upper()} Plan</span>
+        {expiry_html}{expired_html}
+    </div>
+    """, unsafe_allow_html=True)
 
     # ── Pro/Enterprise features list in sidebar ──
     if current_plan in ("pro", "enterprise"):
@@ -1256,7 +1096,7 @@ with st.sidebar:
                 ("LightGBM available",    "lightgbm" in (ADVANCED_CLF_MODELS + ADVANCED_REG_MODELS)),
                 ("CatBoost available",    "catboost" in (ADVANCED_CLF_MODELS + ADVANCED_REG_MODELS)),
                 ("10-fold CV unlocked",   plan_limits["cv_folds_max"] >= 10),
-                ("Unlimited training",    plan_limits["datasets_per_day"] >= 999),
+                ("Unlimited training",    plan_limits["datasets_per_day"] == 999),
                 ("Model export (.pkl)",   plan_limits["export_model"]),
                 ("Advanced models on",    plan_limits["advanced_models"]),
             ]
@@ -1378,15 +1218,6 @@ with st.sidebar:
     st.markdown(f'<div class="sidebar-section"><span class="insight-chip">PyCaret</span><span class="insight-chip">Plotly</span><span class="insight-chip">Pandas</span><span class="insight-chip">Streamlit</span></div>', unsafe_allow_html=True)
 
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-    if st.button("🚪 Sign Out", key="sidebar_logout"):
-        tok = st.session_state.get("login_token")
-        if tok: delete_token(tok)
-        try: st.query_params.clear()
-        except: pass
-        st.session_state.authenticated = False
-        st.session_state.current_user = None
-        st.session_state.login_token = None
-        st.rerun()
 
 # ─────────────────────────────────────────────
 #  HELPERS
@@ -1763,25 +1594,6 @@ if is_admin:
                                 else:
                                     st.error("Min 6 characters required.")
 
-                            # Moderator role
-                            st.markdown("---")
-                            current_role = ud.get("role", "user")
-                            if current_role == "moderator":
-                                st.markdown(f'<div style="font-size:.75rem;color:#60a5fa;margin-bottom:.4rem">🛡️ Currently a Moderator</div>', unsafe_allow_html=True)
-                                if st.button("👤 Remove Moderator", key=f"adm_remove_mod_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["role"] = "user"
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "moderator_removed", "Moderator role removed by admin")
-                                    st.success("Role removed!"); st.rerun()
-                            else:
-                                if st.button("🛡️ Make Moderator", key=f"adm_make_mod_{em}"):
-                                    udb = load_json(USERS_FILE)
-                                    udb[em]["role"] = "moderator"
-                                    save_json(USERS_FILE, udb)
-                                    log_activity(em, "moderator_assigned", "Moderator role assigned by admin")
-                                    st.success("🛡️ Moderator assigned!"); st.rerun()
-                                            
                     # ── TAB 3: Freeze / Read-Only / Delete ──
                     with mt3:
                         is_frozen   = ud.get("frozen", False)
@@ -2068,73 +1880,6 @@ if is_admin:
 
 st.markdown("---")
 
-if is_moderator:
-    with st.expander("🛡️ Moderator Panel", expanded=False):
-        all_payments_mod = load_json(PAYMENTS_FILE)
-        all_users_mod    = load_json(USERS_FILE)
-        pending_mod      = [p for p in all_payments_mod.values() if p.get("status") == "pending"]
-
-        st.markdown(f'<div style="background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.35);border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1rem;display:flex;align-items:center;gap:1rem"><span style="font-size:2rem">🛡️</span><div><div style="font-size:1.1rem;font-weight:900;color:#60a5fa">Moderator Panel</div><div style="font-size:.8rem;color:{TEXT2}">{uname_global} · Moderator Access</div></div></div>', unsafe_allow_html=True)
-
-        mod_tab1, mod_tab2 = st.tabs([
-            f"⏳ Pending Payments ({len(pending_mod)})",
-            f"👥 All Users ({len(all_users_mod)})"
-        ])
-
-        # ── TAB 1: Approve/Reject Payments ──
-        with mod_tab1:
-            if not pending_mod:
-                st.success("✨ No pending payments!")
-            for pay in sorted(pending_mod, key=lambda x: x.get("submitted_at",""), reverse=True):
-                pid = pay.get("id","")
-                plan_c = PRICING.get(pay.get("plan",""),{}).get("color", TEXT2)
-                st.markdown(f"""
-                <div style="background:{CARD_BG};border:2px solid rgba(251,191,36,0.35);border-radius:16px;padding:1.25rem;margin-bottom:.75rem">
-                  <div style="font-weight:800;color:{TEXT1}">{pay.get("name","?")} — {pay.get("email","?")}</div>
-                  <div style="font-size:.8rem;color:{TEXT2};margin:.3rem 0">
-                    Plan: <b style="color:{plan_c}">{pay.get("plan","?").upper()}</b> ·
-                    Amount: <b style="color:#fbbf24">PKR {pay.get("amount",0):,.0f}</b> ·
-                    Method: {pay.get("payment_method","?").replace("_"," ").title()}
-                  </div>
-                  <div style="font-size:.72rem;color:{TEXT3}">Txn: {pay.get("txn_id","?")} · {pay.get("submitted_at","")[:16]} · {pid}</div>
-                </div>""", unsafe_allow_html=True)
-                mc1, mc2 = st.columns(2)
-                with mc1:
-                    if st.button("✅ Approve", key=f"mod_approve_{pid}"):
-                        if approve_payment(pid):
-                            log_activity(pay.get("email",""), "plan_approved", f"{pay.get('plan','')} approved by moderator")
-                            st.success(f"✅ Approved!"); st.rerun()
-                with mc2:
-                    if st.button("❌ Reject", key=f"mod_reject_{pid}"):
-                        pays_rj = load_json(PAYMENTS_FILE)
-                        if pid in pays_rj:
-                            pays_rj[pid]["status"] = "rejected"
-                            pays_rj[pid]["processed_at"] = now_str()
-                            save_json(PAYMENTS_FILE, pays_rj)
-                            log_activity(pay.get("email",""), "plan_rejected", "rejected by moderator")
-                            st.warning("❌ Rejected."); st.rerun()
-                st.markdown("---")
-
-        # ── TAB 2: View Users (read-only) ──
-        with mod_tab2:
-            mod_search = st.text_input("🔍 Search", key="mod_search", placeholder="Name or email...")
-            for em, ud in sorted(all_users_mod.items(), key=lambda x: x[1].get("signup_date",""), reverse=True):
-                if mod_search and mod_search.lower() not in em.lower() and mod_search.lower() not in ud.get("name","").lower():
-                    continue
-                u_plan = get_user_plan(em)
-                u_pc   = PLAN_COLORS.get(u_plan, "#6b7280")
-                online_st = get_online_status(ud)
-                st.markdown(f"""
-                <div style="background:{CARD_BG};border:1px solid {BORDER};border-radius:12px;padding:.9rem 1.25rem;margin-bottom:.4rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
-                  <div style="flex:1;min-width:180px">
-                    <div style="font-weight:700;color:{TEXT1}">{ud.get("name","?")}</div>
-                    <div style="font-size:.72rem;color:{TEXT3}">{em}</div>
-                  </div>
-                  <span style="font-size:.75rem;font-weight:800;color:{u_pc}">{u_plan.upper()}</span>
-                  <span style="font-size:.75rem;color:{online_st['color']}">{online_st['dot']} {online_st['label']}</span>
-                  <div style="font-size:.68rem;color:{TEXT3}">Joined: {ud.get("signup_date","—")[:10]}</div>
-                </div>""", unsafe_allow_html=True)
-
 # ─────────────────────────────────────────────
 #  MAIN TABS
 # ─────────────────────────────────────────────
@@ -2369,11 +2114,7 @@ if st.session_state.data is not None:
               <span class="insight-chip">📦 {"XGBoost ✅ LightGBM ✅ CatBoost ✅" if has_advanced else "XGBoost 🔒 Pro only"}</span>
               <span class="insight-chip">💾 Max {MAX_ROWS_TRAINING:,} rows (auto-sample)</span>
             </div>""", unsafe_allow_html=True)
-            
-            fold = 2
-            max_models_slider = len(available_models)
-            normalize = True
-            remove_out = False
+
             with st.expander("⚙️ Advanced Configuration", expanded=False):
                 ac1, ac2, ac3 = st.columns(3)
                 with ac1:
@@ -2522,7 +2263,7 @@ if st.session_state.data is not None:
                         )
                         if has_advanced:
                             # Show which pro features were actually used
-                            _pro_models_used = [m for m in available_models if m in ["xgboost","lightgbm","catboost"]]
+                            _pro_models_used = [m for m in include_models if m in ["xgboost","lightgbm","catboost"]]
                             _pro_chips = " &nbsp; ".join([f'<span style="background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.4);border-radius:6px;padding:.2rem .6rem;font-size:.72rem;font-weight:800">{m.title()} ✓ PRO</span>' for m in _pro_models_used])
                             st.markdown(f"""
                             <div style="background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);
@@ -2822,8 +2563,8 @@ if st.session_state.data is not None:
         if st.session_state.upgrade_plan_selected:
             selected_plan = st.session_state.upgrade_plan_selected
             is_ann        = is_annual
-            amount_usd = PRICING[selected_plan]["annual_total"] if is_ann else PRICING[selected_plan]["monthly_price"]
-            amount_pkr = amount_usd * 280
+            amount_usd    = PRICING[selected_plan]["annual_price"] if is_ann else PRICING[selected_plan]["monthly_price"]
+            amount_pkr    = amount_usd * 280
 
             st.markdown(f"""
             <div style="background:{"rgba(74,222,128,0.05)" if T=="dark" else "rgba(124,58,237,0.05)"};
@@ -2940,7 +2681,6 @@ if st.session_state.data is not None:
                         )
                         st.session_state.upgrade_plan_selected = None
                         st.success(f"""
-
 ✅ **Payment request submitted successfully!**
 
 **Payment ID:** `{pay_id}`
@@ -3003,7 +2743,6 @@ We'll verify your payment within **2-24 hours** and activate your {selected_plan
                 h += '</div>'
                 st.markdown(h, unsafe_allow_html=True)
 
-       
         # ── FAQ ──
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">❓</div><h3>Frequently Asked Questions</h3></div>""", unsafe_allow_html=True)
@@ -3045,8 +2784,7 @@ else:
               <h3>{title}</h3><p>{desc}</p>
             </div>""", unsafe_allow_html=True)
 
-    
-        st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
     st.markdown(f"""
     <div style="text-align:center;margin-bottom:1.5rem">
       <div style="font-size:1.4rem;font-weight:900;background:{HERO_H1_GRAD};-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">💎 Plans & Pricing</div>
@@ -3060,7 +2798,6 @@ else:
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">forever free</div>
         <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ 3 datasets/day<br>✓ 8 basic algorithms<br>✓ 2-fold CV<br><span style="color:{TEXT3}">✗ XGBoost / LightGBM<br>✗ Model export (.pkl)<br>✗ API access</span></div>
         <div style="margin-top:1.25rem;padding:.6rem;background:rgba(107,114,128,0.12);border-radius:10px;text-align:center;font-size:.8rem;font-weight:700;color:#9ca3af">✓ Your Current Plan</div>
-      
       </div>
       <div style="background:{CARD_BG};border:2px solid #4ade80;border-radius:20px;padding:1.75rem;position:relative;box-shadow:0 0 28px rgba(74,222,128,0.12)">
         <div style="position:absolute;top:.9rem;right:.9rem;background:linear-gradient(135deg,#16a34a,#22c55e);color:white;font-size:.62rem;font-weight:800;padding:.2rem .6rem;border-radius:999px;text-transform:uppercase;letter-spacing:.05em">⭐ Most Popular</div>
@@ -3070,7 +2807,6 @@ else:
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">or $15/mo billed annually</div>
         <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ Unlimited datasets<br>✓ 13 algorithms<br>✓ 10-fold CV<br>✓ XGBoost, LightGBM, CatBoost ✅<br>✓ Export model (.pkl) ✅<br>✓ 50-entry history</div>
         <div style="margin-top:1.25rem;padding:.6rem;background:linear-gradient(135deg,rgba(74,222,128,0.15),rgba(74,222,128,0.08));border:1px solid rgba(74,222,128,0.35);border-radius:10px;text-align:center;font-size:.82rem;font-weight:800;color:#4ade80">⚡ Load a dataset → 💳 Upgrade tab</div>
-      
       </div>
       <div style="background:{CARD_BG};border:2px solid {BORDER};border-radius:20px;padding:1.75rem">
         <div style="font-size:2rem;margin-bottom:.5rem">🏢</div>
