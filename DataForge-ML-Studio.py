@@ -244,8 +244,8 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
 PRICING = {
     "pro": {
         "name": "Pro", "icon": "⚡",
-        "monthly_price": 19, "annual_price": 15,
-        "annual_total": 180, "color": "#4ade80",
+        "monthly_price": 1, "annual_price": 1,
+        "annual_total": 12, "color": "#4ade80",
         "features": [
             "Unlimited datasets per month","15+ ML algorithms","10-fold cross-validation",
             "XGBoost, LightGBM, CatBoost","Export trained models (.pkl)",
@@ -1104,7 +1104,6 @@ with st.sidebar:
     st.markdown(f"""
     <div class="sidebar-section" style="text-align:center">
       <div style="font-size:1.5rem;margin-bottom:.3rem">{plan_icon}</div>
-      <div style="font-size:.75rem;font-weight:700;color:{name_color};margin-bottom:.3rem">{uname_global}</div>
       <span class="plan-badge {current_plan}">{plan_icon} {current_plan.upper()} Plan</span>
         {expiry_html}{expired_html}
     </div>
@@ -2692,14 +2691,14 @@ if st.session_state.data is not None:
         with pc2:
             pro_price = PRICING["pro"]["annual_price"] if is_annual else PRICING["pro"]["monthly_price"]
             pro_total = f"Billed ${PRICING['pro']['annual_total']}/year" if is_annual else "Billed monthly"
-            savings   = f"Save ${PRICING['pro']['monthly_price']*12 - PRICING['pro']['annual_total']}/yr" if is_annual else ""
-            sav_html  = f'<span style="color:#4ade80;font-weight:700">· {savings}</span>' if savings else ""
             st.markdown(f"""
             <div class="pricing-card popular">
               <div class="popular-badge">⭐ Most Popular</div>
-              <div class="plan-icon">⚡</div><div class="plan-name">Pro</div>
+              <div style="position:absolute;top:1rem;left:1rem;background:linear-gradient(135deg,#dc2626,#f87171);color:white;font-size:.65rem;font-weight:900;padding:.25rem .7rem;border-radius:999px;text-transform:uppercase;letter-spacing:.06em">🔥 99% OFF</div>
+              <div class="plan-icon" style="margin-top:1.5rem">⚡</div><div class="plan-name">Pro</div>
+              <div style="font-size:.8rem;color:#9ca3af;text-decoration:line-through;margin-top:.5rem">Was $19/mo</div>
               <div class="price-main" style="color:#4ade80">${pro_price}</div>
-              <div class="price-period">/month · {pro_total} {sav_html}</div>
+              <div class="price-period">/month · {pro_total} · <span style="color:#f87171;font-weight:800">Limited time offer!</span></div>
               <ul class="feature-list">
                 <li class="included">Unlimited datasets</li><li class="included">13 algorithms</li>
                 <li class="included">10-fold cross validation</li><li class="included">XGBoost, LightGBM, CatBoost ✅</li>
@@ -2991,7 +2990,7 @@ else:
         <div style="position:absolute;top:.9rem;right:.9rem;background:linear-gradient(135deg,#16a34a,#22c55e);color:white;font-size:.62rem;font-weight:800;padding:.2rem .6rem;border-radius:999px;text-transform:uppercase;letter-spacing:.05em">⭐ Most Popular</div>
         <div style="font-size:2rem;margin-bottom:.5rem">⚡</div>
         <div style="font-size:1.1rem;font-weight:900;color:{TEXT1}">Pro</div>
-        <div style="font-size:2.5rem;font-weight:900;color:#4ade80;margin:.5rem 0 .25rem">$19<span style="font-size:1rem;font-weight:400;color:{TEXT3}">/mo</span></div>
+        <div style="font-size:2.5rem;font-weight:900;color:#4ade80;margin:.5rem 0 .25rem">$1<span style="font-size:1rem;font-weight:400;color:{TEXT3}">/mo</span> <span style="background:#dc2626;color:white;font-size:.6rem;font-weight:900;padding:.15rem .5rem;border-radius:999px">🔥 99% OFF</span></div>
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">or $15/mo billed annually</div>
         <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ Unlimited datasets<br>✓ 13 algorithms<br>✓ 10-fold CV<br>✓ XGBoost, LightGBM, CatBoost ✅<br>✓ Export model (.pkl) ✅<br>✓ 50-entry history</div>
         <div style="margin-top:1.25rem;padding:.6rem;background:linear-gradient(135deg,rgba(74,222,128,0.15),rgba(74,222,128,0.08));border:1px solid rgba(74,222,128,0.35);border-radius:10px;text-align:center;font-size:.82rem;font-weight:800;color:#4ade80">⚡ Load a dataset → 💳 Upgrade tab</div>
