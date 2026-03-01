@@ -1145,7 +1145,7 @@ with st.sidebar:
                 ("LightGBM available",    "lightgbm" in (ADVANCED_CLF_MODELS + ADVANCED_REG_MODELS)),
                 ("CatBoost available",    "catboost" in (ADVANCED_CLF_MODELS + ADVANCED_REG_MODELS)),
                 ("10-fold CV unlocked",   plan_limits["cv_folds_max"] >= 10),
-                ("Unlimited training",    plan_limits["datasets_per_day"] == 999),
+                ("Unlimited training",    plan_limits["datasets_per_day"] >= 999),
                 ("Model export (.pkl)",   plan_limits["export_model"]),
                 ("Advanced models on",    plan_limits["advanced_models"]),
             ]
