@@ -1,6 +1,6 @@
 # =====================================================================
 #  DataForge ML Studio — Full App with Payment/Upgrade System
-#  FIXED VERSION — All 7 bugs patched
+#  FIXED VERSION — MongoDB Persistent Storage
 # =====================================================================
 import streamlit as st
 import pandas as pd
@@ -24,26 +24,69 @@ warnings.filterwarnings("ignore")
 st.set_page_config(page_title="DataForge ML Studio", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
 
 # ─────────────────────────────────────────────
-#  PERSISTENT STORAGE — JSON FILES
+#  MONGODB PERSISTENT STORAGE
 # ─────────────────────────────────────────────
-USERS_FILE   = "dataforge_users.json"
-HISTORY_FILE = "dataforge_history.json"
-TOKENS_FILE  = "dataforge_tokens.json"
-PAYMENTS_FILE  = "dataforge_payments.json"
-ADMIN_EMAILS   = {"shayan.code1@gmail.com"}
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure
+import certifi
 
-def load_json(path):
-    if os.path.exists(path):
-        try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
+ADMIN_EMAILS = {"shayan.code1@gmail.com"}
 
-def save_json(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+@st.cache_resource
+def get_db():
+    """Get MongoDB connection — cached so only one connection is made."""
+    try:
+        mongo_uri = st.secrets.get("MONGO_URI", "")
+        if not mongo_uri:
+            st.error("❌ MONGO_URI not found in secrets! Add it in Streamlit Cloud settings.")
+            st.stop()
+        client = MongoClient(mongo_uri, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=5000)
+        client.admin.command('ping')
+        return client["dataforge"]
+    except Exception as e:
+        st.error(f"❌ MongoDB connection failed: {e}")
+        st.stop()
+
+def get_col(name):
+    return get_db()[name]
+
+# ── Drop-in replacements for load_json / save_json ──
+# Each "file" maps to a MongoDB collection.
+# Documents are stored as {_id: key, data: {...}} where key is the
+# logical record id (email for users, token string for tokens, etc.)
+# For flat dicts (users, history, tokens, payments) we store the
+# entire dict as a single document with _id = collection name,
+# so existing code that does load_json(FILE) / save_json(FILE, dict)
+# works without change.
+
+def load_json(collection_name):
+    """Load entire collection as a plain dict (mirrors old JSON behaviour)."""
+    try:
+        col = get_col("kv_store")
+        doc = col.find_one({"_id": collection_name})
+        if doc:
+            return doc.get("data", {})
+        return {}
+    except Exception:
+        return {}
+
+def save_json(collection_name, data):
+    """Save entire dict to MongoDB (upsert)."""
+    try:
+        col = get_col("kv_store")
+        col.update_one(
+            {"_id": collection_name},
+            {"$set": {"data": data}},
+            upsert=True
+        )
+    except Exception as e:
+        st.warning(f"⚠️ DB save error: {e}")
+
+# Keep same variable names so rest of code works unchanged
+USERS_FILE    = "dataforge_users"
+HISTORY_FILE  = "dataforge_history"
+TOKENS_FILE   = "dataforge_tokens"
+PAYMENTS_FILE = "dataforge_payments"
 
 # ─────────────────────────────────────────────
 #  MEMORY-SAFE TRAINING CONFIG
@@ -418,13 +461,13 @@ try:
     SMTP_PASS = st.secrets["SMTP_PASS"]
 except Exception:
     SMTP_USER = "shayan.code1@gmail.com"
-    SMTP_PASS = "nvvjgvtxxooprkcb"
+    SMTP_PASS = "kiuabeuhkmwfpjie"
 
 def send_email(subject: str, body: str):
     if not SMTP_USER or not SMTP_PASS:
-        log = load_json("dataforge_email_log.json")
+        log = load_json("dataforge_email_log")
         log[now_str()] = {"subject": subject, "body": body, "error": "No SMTP credentials"}
-        save_json("dataforge_email_log.json", log)
+        save_json("dataforge_email_log", log)
         return False
     try:
         msg = MIMEMultipart("alternative")
@@ -457,12 +500,12 @@ def send_email(subject: str, body: str):
                 continue
         if not sent:
             raise last_err
-        log = load_json("dataforge_email_log.json")
+        log = load_json("dataforge_email_log")
         log[now_str()] = {"subject": subject, "status": "sent_ok"}
-        save_json("dataforge_email_log.json", log)
+        save_json("dataforge_email_log", log)
         return True
     except Exception as e:
-        log = load_json("dataforge_email_log.json")
+        log = load_json("dataforge_email_log")
         log[now_str()] = {
             "subject": subject, "body": body[:500], "error": str(e),
             "error_type": type(e).__name__, "smtp_user": SMTP_USER,
@@ -471,8 +514,9 @@ def send_email(subject: str, body: str):
                 "Go to myaccount.google.com → Security → 2-Step Verification → App passwords."
             )
         }
-        save_json("dataforge_email_log.json", log)
+        save_json("dataforge_email_log", log)
         return False
+
 
 def notify_signup(user: dict):
     users_db = load_json(USERS_FILE)
@@ -814,41 +858,46 @@ if not st.session_state.authenticated:
             su_pass2 = st.text_input("Confirm Password", type="password", placeholder="Repeat your password", key="su_pass2")
 
             if st.button("🚀 Create Account & Enter Studio", key="do_signup"):
-                if not su_name or not su_email or not su_pass:
+                # Read directly from session_state — more reliable than local vars after button click
+                _name  = st.session_state.get("su_name", su_name)
+                _email = st.session_state.get("su_email", su_email)
+                _pass  = st.session_state.get("su_pass", su_pass)
+                _pass2 = st.session_state.get("su_pass2", su_pass2)
+
+                if not _name or not _email or not _pass:
                     st.error("❌ Please fill in all fields.")
-                elif "@" not in su_email:
+                elif "@" not in _email:
                     st.error("❌ Please enter a valid email address.")
-                elif su_pass != su_pass2:
+                elif _pass != _pass2:
                     st.error("❌ Passwords do not match.")
-                elif len(su_pass) < 6:
+                elif len(_pass) < 6:
                     st.error("❌ Password must be at least 6 characters.")
                 else:
                     users_db = load_json(USERS_FILE)
-                    if su_email in users_db:
+                    if _email in users_db:
                         st.error("❌ An account with this email already exists.")
                     else:
-                        users_db[su_email] = {
-                            "name": su_name, "email": su_email,
-                            "password_hash": hash_password(su_pass),
-                            "plain_password": su_pass,   # ← YEH ADD KARO
-                            "signup_date": now_str(), "plan": "free"
+                        users_db[_email] = {
+                            "name": _name, "email": _email,
+                            "password_hash": hash_password(_pass),
+                            "signup_date": now_str(), "plan": "free",
                         }
                         save_json(USERS_FILE, users_db)
-                        update_user_history(su_email, {
+                        update_user_history(_email, {
                             "signup_date": now_str(), "last_login": now_str(),
                             "login_count": 1, "datasets_trained": 0,
                             "training_log": [], "activity_log": [{"time": now_str(), "action": "signup", "detail": "Account created"}]
                         })
-                        notify_signup({"name": su_name, "email": su_email, "password": su_pass})
+                        notify_signup({"name": _name, "email": _email, "password": _pass})
                         st.session_state.authenticated = True
-                        st.session_state.current_user = {"name": su_name, "email": su_email}
-                        token = create_token(su_email)
+                        st.session_state.current_user = {"name": _name, "email": _email}
+                        token = create_token(_email)
                         st.session_state.login_token = token
                         try:
                             st.query_params["token"] = token
                         except:
                             pass
-                        st.success(f"✅ Welcome to DataForge, {su_name}!")
+                        st.success(f"✅ Welcome to DataForge, {_name}!")
                         time.sleep(0.8); st.rerun()
         else:
             si_email = st.text_input("Email Address", placeholder="your@email.com", key="si_email")
@@ -1260,7 +1309,6 @@ if is_admin:
                 login_count  = u_hist.get("login_count",0)
                 last_login   = ud.get("last_login") or u_hist.get("last_login","—")
                 join_date    = ud.get("signup_date","—")[:10]
-                last_ip      = ud.get("last_ip","—")
                 admin_note   = ud.get("admin_note","")
                 suspend_until= ud.get("suspended_until","")
                 user_payments_list = [p for p in all_payments.values() if p.get("email")==em]
@@ -1289,7 +1337,6 @@ if is_admin:
                 h += f'<div style="text-align:center"><div style="font-size:.85rem;font-weight:900;color:{ACCENTY}">{len(user_payments_list)}</div><div style="font-size:.58rem;color:{TEXT3}">payments</div></div>'
                 h += f'<div style="text-align:right"><div style="font-size:.68rem;color:{TEXT3}">📅 Joined: {join_date}</div>'
                 h += f'<div style="font-size:.68rem;color:{TEXT3}">🕐 Last: {str(last_login)[:16]}</div>'
-                h += f'<div style="font-size:.68rem;color:{TEXT3}">🌐 IP: {last_ip}</div></div>'
                 h += f'</div></div></div>'
                 st.markdown(h, unsafe_allow_html=True)
 
@@ -1313,10 +1360,7 @@ if is_admin:
                             st.markdown(f'<div style="font-size:.7rem;font-weight:800;text-transform:uppercase;color:{TEXT3};margin-bottom:.5rem">User Info</div>', unsafe_allow_html=True)
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">📧 <b>Email:</b> {em}</div>', unsafe_allow_html=True)
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">📅 <b>Joined:</b> {join_date}</div>', unsafe_allow_html=True)
-                            plain_pw = ud.get("plain_password", "—")
-                            st.markdown(f'<div style="font-size:.8rem;color:#fbbf24;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:6px;padding:.3rem .6rem;margin:.3rem 0">🔑 <b>Password:</b> {plain_pw}</div>', unsafe_allow_html=True)
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🕐 <b>Last Login:</b> {str(last_login)[:16]}</div>', unsafe_allow_html=True)
-                            st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🌐 <b>Last IP:</b> {last_ip}</div>', unsafe_allow_html=True)
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🔢 <b>Total Logins:</b> {login_count}</div>', unsafe_allow_html=True)
                             expiry = ud.get("plan_expiry","—")
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">⏳ <b>Plan Expiry:</b> {expiry}</div>', unsafe_allow_html=True)
@@ -1551,7 +1595,7 @@ if is_admin:
                                 st.markdown(h5, unsafe_allow_html=True)
 
         with adm4:
-            email_log = load_json("dataforge_email_log.json")
+            email_log = load_json("dataforge_email_log")
             if not email_log:
                 st.info("No email events logged yet.")
             else:
@@ -1562,7 +1606,7 @@ if is_admin:
                         "email_log.csv","text/csv", key="adm_dl_email")
                 with ec2:
                     if st.button("🗑️ Clear Log", key="adm_clear_email"):
-                        save_json("dataforge_email_log.json",{})
+                        save_json("dataforge_email_log",{})
                         st.success("Cleared!"); st.rerun()
 
                 for ts, entry in sorted(email_log.items(), reverse=True)[:50]:
@@ -2346,7 +2390,7 @@ We'll verify your payment within **2-24 hours** and activate your {selected_plan
                         if email_sent:
                             st.info("📧 Notification email sent to admin successfully.")
                         else:
-                            email_log = load_json("dataforge_email_log.json")
+                            email_log = load_json("dataforge_email_log")
                             last_err_msg = ""
                             for ts, entry in reversed(list(email_log.items())):
                                 if "error" in entry:
