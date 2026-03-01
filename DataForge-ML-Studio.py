@@ -1220,9 +1220,14 @@ with st.sidebar:
     if uploaded:
         try:
             df_up = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
-            st.session_state.data = df_up
-            st.session_state.dataset_name = uploaded.name
-            st.success(f"✓ {len(df_up):,} rows loaded")
+            if st.session_state.get("_last_uploaded") != uploaded.name:
+                st.session_state.data = df_up
+                st.session_state.dataset_name = uploaded.name
+                st.session_state.results = None
+                st.session_state.best_model = None
+                st.session_state["_last_uploaded"] = uploaded.name
+                st.session_state.pop("sample_hint", None)
+                st.rerun()
         except Exception as e:
             st.error(str(e))
 
@@ -1241,10 +1246,15 @@ with st.sidebar:
                 df_s = pd.read_csv(url)
                 st.session_state.data = df_s
                 st.session_state.dataset_name = sample
-                st.success(f"✓ {len(df_s):,} rows")
-                st.info(f"💡 Target: **{hint}**")
+                st.session_state.results = None
+                st.session_state.best_model = None
+                st.session_state["sample_hint"] = hint
+                st.rerun()
             except Exception as e:
                 st.error(str(e))
+
+    if st.session_state.get("sample_hint"):
+        st.info(f"💡 Target: **{st.session_state['sample_hint']}**")
 
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
