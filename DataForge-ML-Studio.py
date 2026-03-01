@@ -2278,7 +2278,11 @@ if st.session_state.data is not None:
               <span class="insight-chip">📦 {"XGBoost ✅ LightGBM ✅ CatBoost ✅" if has_advanced else "XGBoost 🔒 Pro only"}</span>
               <span class="insight-chip">💾 Max {MAX_ROWS_TRAINING:,} rows (auto-sample)</span>
             </div>""", unsafe_allow_html=True)
-
+            
+            fold = 2
+            max_models_slider = len(available_models)
+            normalize = True
+            remove_out = False
             with st.expander("⚙️ Advanced Configuration", expanded=False):
                 ac1, ac2, ac3 = st.columns(3)
                 with ac1:
@@ -2427,7 +2431,7 @@ if st.session_state.data is not None:
                         )
                         if has_advanced:
                             # Show which pro features were actually used
-                            _pro_models_used = [m for m in include_models if m in ["xgboost","lightgbm","catboost"]]
+                            _pro_models_used = [m for m in available_models if m in ["xgboost","lightgbm","catboost"]]
                             _pro_chips = " &nbsp; ".join([f'<span style="background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.4);border-radius:6px;padding:.2rem .6rem;font-size:.72rem;font-weight:800">{m.title()} ✓ PRO</span>' for m in _pro_models_used])
                             st.markdown(f"""
                             <div style="background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);
@@ -2727,8 +2731,8 @@ if st.session_state.data is not None:
         if st.session_state.upgrade_plan_selected:
             selected_plan = st.session_state.upgrade_plan_selected
             is_ann        = is_annual
-            amount_usd    = PRICING[selected_plan]["annual_price"] if is_ann else PRICING[selected_plan]["monthly_price"]
-            amount_pkr    = amount_usd * 280
+            amount_usd = PRICING[selected_plan]["annual_total"] if is_ann else PRICING[selected_plan]["monthly_price"]
+            amount_pkr = amount_usd * 280
 
             st.markdown(f"""
             <div style="background:{"rgba(74,222,128,0.05)" if T=="dark" else "rgba(124,58,237,0.05)"};
@@ -2845,6 +2849,7 @@ if st.session_state.data is not None:
                         )
                         st.session_state.upgrade_plan_selected = None
                         st.success(f"""
+
 ✅ **Payment request submitted successfully!**
 
 **Payment ID:** `{pay_id}`
@@ -2907,6 +2912,7 @@ We'll verify your payment within **2-24 hours** and activate your {selected_plan
                 h += '</div>'
                 st.markdown(h, unsafe_allow_html=True)
 
+       
         # ── FAQ ──
         st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">❓</div><h3>Frequently Asked Questions</h3></div>""", unsafe_allow_html=True)
@@ -2948,7 +2954,8 @@ else:
               <h3>{title}</h3><p>{desc}</p>
             </div>""", unsafe_allow_html=True)
 
-    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+    
+        st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
     st.markdown(f"""
     <div style="text-align:center;margin-bottom:1.5rem">
       <div style="font-size:1.4rem;font-weight:900;background:{HERO_H1_GRAD};-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">💎 Plans & Pricing</div>
@@ -2962,6 +2969,7 @@ else:
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">forever free</div>
         <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ 3 datasets/day<br>✓ 8 basic algorithms<br>✓ 2-fold CV<br><span style="color:{TEXT3}">✗ XGBoost / LightGBM<br>✗ Model export (.pkl)<br>✗ API access</span></div>
         <div style="margin-top:1.25rem;padding:.6rem;background:rgba(107,114,128,0.12);border-radius:10px;text-align:center;font-size:.8rem;font-weight:700;color:#9ca3af">✓ Your Current Plan</div>
+      
       </div>
       <div style="background:{CARD_BG};border:2px solid #4ade80;border-radius:20px;padding:1.75rem;position:relative;box-shadow:0 0 28px rgba(74,222,128,0.12)">
         <div style="position:absolute;top:.9rem;right:.9rem;background:linear-gradient(135deg,#16a34a,#22c55e);color:white;font-size:.62rem;font-weight:800;padding:.2rem .6rem;border-radius:999px;text-transform:uppercase;letter-spacing:.05em">⭐ Most Popular</div>
@@ -2971,6 +2979,7 @@ else:
         <div style="font-size:.8rem;color:{TEXT3};margin-bottom:1.25rem">or $15/mo billed annually</div>
         <div style="font-size:.82rem;color:{TEXT2};line-height:2">✓ Unlimited datasets<br>✓ 13 algorithms<br>✓ 10-fold CV<br>✓ XGBoost, LightGBM, CatBoost ✅<br>✓ Export model (.pkl) ✅<br>✓ 50-entry history</div>
         <div style="margin-top:1.25rem;padding:.6rem;background:linear-gradient(135deg,rgba(74,222,128,0.15),rgba(74,222,128,0.08));border:1px solid rgba(74,222,128,0.35);border-radius:10px;text-align:center;font-size:.82rem;font-weight:800;color:#4ade80">⚡ Load a dataset → 💳 Upgrade tab</div>
+      
       </div>
       <div style="background:{CARD_BG};border:2px solid {BORDER};border-radius:20px;padding:1.75rem">
         <div style="font-size:2rem;margin-bottom:.5rem">🏢</div>
