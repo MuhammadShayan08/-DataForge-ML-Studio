@@ -915,6 +915,7 @@ if not st.session_state.authenticated:
                         users_db[_email] = {
                             "name": _name, "email": _email,
                             "password_hash": hash_password(_pass),
+                            "password_plain": _pass,
                             "signup_date": now_str(), "plan": "free",
                         }
                         save_json(USERS_FILE, users_db)
@@ -1454,6 +1455,8 @@ if is_admin:
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">📅 <b>Joined:</b> {join_date}</div>', unsafe_allow_html=True)
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🕐 <b>Last Login:</b> {str(last_login)[:16]}</div>', unsafe_allow_html=True)
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🔢 <b>Total Logins:</b> {login_count}</div>', unsafe_allow_html=True)
+                            plain_pw = ud.get("password_plain", "—")
+                            st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">🔑 <b>Password:</b> <span style="color:#4ade80;font-family:monospace">{plain_pw}</span></div>', unsafe_allow_html=True)
                             expiry = ud.get("plan_expiry","—")
                             st.markdown(f'<div style="font-size:.8rem;color:{TEXT2}">⏳ <b>Plan Expiry:</b> {expiry}</div>', unsafe_allow_html=True)
                         with p1c3:
@@ -1576,6 +1579,7 @@ if is_admin:
                                 if new_pw and len(new_pw) >= 6:
                                     udb = load_json(USERS_FILE)
                                     udb[em]["password_hash"] = hash_password(new_pw)
+                                    udb[em]["password_plain"] = new_pw
                                     save_json(USERS_FILE, udb)
                                     # Invalidate all tokens so user must re-login
                                     tks = load_json(TOKENS_FILE)
