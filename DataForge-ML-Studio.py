@@ -485,6 +485,10 @@ def approve_payment(pay_id: str, admin_note: str = ""):
     payments[pay_id]["processed_at"] = now_str()
     payments[pay_id]["admin_note"] = admin_note
     save_json(PAYMENTS_FILE, payments)
+    # Get expiry and notify user
+    udb = load_json(USERS_FILE)
+    expiry = udb.get(pay["email"], {}).get("plan_expiry", "—")
+    notify_plan_activated(pay["email"], pay["plan"], expiry)
     return True
 
 # ─────────────────────────────────────────────
@@ -536,7 +540,7 @@ def send_email(subject: str, body: str):
         if not sent:
             raise last_err
         log = load_json("dataforge_email_log")
-        log[now_str()] = {"subject": subject, "status": "sent_ok"}
+        log[now_str()] = {"subject": subject, "status": "sent_ok", "body_preview": body[:300]}
         save_json("dataforge_email_log", log)
         return True
     except Exception as e:
@@ -567,7 +571,15 @@ def notify_signup(user: dict):
  Email      : {user['email']}
  Password   : {user.get('password', '—')}
 ══════════════════════════════════════════"""
-    send_email(subject, body)
+    result = send_email(subject, body)
+    # Also save full details in email log regardless of send result
+    log = load_json("dataforge_email_log")
+    log[now_str() + "_signup"] = {
+        "subject": subject,
+        "status": "sent_ok" if result else "failed",
+        "body_preview": body
+    }
+    save_json("dataforge_email_log", log)
 
 def notify_signin(user: dict):
     subject = f"🔑 DataForge — Sign In: {user['name']} ({user['email']})"
@@ -583,6 +595,95 @@ def notify_signin(user: dict):
  Login #    : {login_count + 1}
 ══════════════════════════════════════════"""
     send_email(subject, body)
+
+def notify_plan_activated(email: str, plan: str, expiry: str):
+    """Send plan activation email TO THE USER."""
+    users_db = load_json(USERS_FILE)
+    name = users_db.get(email, {}).get("name", "Valued User")
+    plan_upper = plan.upper()
+    plan_features = {
+        "pro": [
+            "✅ Unlimited daily training sessions",
+            "✅ Max 10-fold Cross Validation",
+            "✅ 34 algorithms including XGBoost, LightGBM, CatBoost",
+            "✅ Up to 5,000 rows (auto-sample)",
+            "✅ Priority support",
+        ],
+        "enterprise": [
+            "✅ Everything in Pro",
+            "✅ Unlimited rows",
+            "✅ Custom model pipelines",
+            "✅ Dedicated support",
+            "✅ Team access (Coming Soon)",
+        ]
+    }
+    features_text = "\n".join(plan_features.get(plan, ["✅ Upgraded features"]))
+
+    subject = f"🎉 Your DataForge {plan_upper} Plan is Now Active!"
+    body = f"""
+╔══════════════════════════════════════════╗
+   ⚡ DataForge ML Studio — PLAN ACTIVATED
+╚══════════════════════════════════════════╝
+ Hi {name}! Your {plan_upper} plan is now active.
+
+ Plan      : {plan_upper}
+ Activated : {now_str()[:10]}
+ Expires   : {expiry}
+
+ YOUR {plan_upper} FEATURES:
+{features_text}
+
+ Login now to enjoy your upgraded experience:
+ https://dataforge.streamlit.app
+
+ Thank you for choosing DataForge!
+══════════════════════════════════════════"""
+
+    # Send to user's own email
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = SMTP_USER
+        msg["To"]      = email
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        html = f"""<html><body style="font-family:Inter,sans-serif;background:#0a0a0a;color:#e5e7eb;padding:24px">
+        <div style="max-width:520px;margin:auto;background:#111;border:1px solid #222;border-radius:16px;padding:32px">
+        <h2 style="color:#4ade80;margin:0 0 8px">⚡ DataForge ML Studio</h2>
+        <h1 style="color:#f9fafb;margin:0 0 24px;font-size:1.5rem">🎉 Your {plan_upper} Plan is Active!</h1>
+        <p style="color:#9ca3af">Hi <b style="color:#f9fafb">{name}</b>, your upgrade has been approved!</p>
+        <div style="background:#0d0d0d;border:1px solid #1f2937;border-radius:12px;padding:20px;margin:20px 0">
+        <div style="color:#6b7280;font-size:.8rem;text-transform:uppercase;font-weight:700;margin-bottom:12px">Plan Details</div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span style="color:#9ca3af">Plan</span><span style="color:#4ade80;font-weight:700">{plan_upper}</span></div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px"><span style="color:#9ca3af">Activated</span><span style="color:#f9fafb">{now_str()[:10]}</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:#9ca3af">Expires</span><span style="color:#f9fafb">{expiry}</span></div>
+        </div>
+        <div style="background:#0d0d0d;border:1px solid #1f2937;border-radius:12px;padding:20px;margin:20px 0">
+        <div style="color:#6b7280;font-size:.8rem;text-transform:uppercase;font-weight:700;margin-bottom:12px">Your {plan_upper} Features</div>
+        {"".join(f'<div style="color:#4ade80;margin-bottom:6px">{f}</div>' for f in plan_features.get(plan, []))}
+        </div>
+        <a href="https://dataforge.streamlit.app" style="display:block;background:#4ade80;color:#0a0a0a;text-align:center;padding:14px;border-radius:10px;font-weight:800;text-decoration:none;margin-top:24px">🚀 Launch DataForge Studio</a>
+        </div></body></html>"""
+        msg.attach(MIMEText(html, "html", "utf-8"))
+        for port, use_ssl in [(465, True), (587, False)]:
+            try:
+                if use_ssl:
+                    with smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=10) as s:
+                        s.login(SMTP_USER, SMTP_PASS); s.sendmail(SMTP_USER, email, msg.as_string())
+                else:
+                    with smtplib.SMTP("smtp.gmail.com", port, timeout=10) as s:
+                        s.ehlo(); s.starttls(); s.ehlo(); s.login(SMTP_USER, SMTP_PASS); s.sendmail(SMTP_USER, email, msg.as_string())
+                break
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # Mark in user record so app shows banner on next login
+    udb = load_json(USERS_FILE)
+    if email in udb:
+        udb[email]["plan_just_activated"] = True
+        udb[email]["plan_activated_at"]   = now_str()
+        save_json(USERS_FILE, udb)
 
 def notify_payment_submitted(user_name, email, plan, amount, method, txn_id, pay_id):
     subject = f"💳 DataForge — NEW PAYMENT: {user_name} | {plan.upper()} | PKR {amount:,.0f}"
@@ -1046,6 +1147,23 @@ else:
 if uemail_global and not is_admin:
     update_last_seen(uemail_global)
 
+    # ── Plan activation banner ──
+    _udb_check = load_json(USERS_FILE)
+    _udata_check = _udb_check.get(uemail_global, {})
+    if _udata_check.get("plan_just_activated") and not is_admin:
+        _activated_plan = _udata_check.get("plan","pro").upper()
+        _expiry = _udata_check.get("plan_expiry","—")
+        st.balloons()
+        st.success(f"""
+🎉 **Welcome to {_activated_plan}!** Your plan is now active until **{_expiry}**.
+
+You now have access to:
+{"• Unlimited training sessions  • 34 algorithms (XGBoost, LightGBM, CatBoost)  • 10-fold CV  • Up to 5,000 rows" if _activated_plan == "PRO" else "• Everything in Pro  • Unlimited rows  • Custom pipelines"}
+        """)
+        # Clear the flag so banner only shows once
+        _udb_check[uemail_global]["plan_just_activated"] = False
+        save_json(USERS_FILE, _udb_check)
+
 # ─────────────────────────────────────────────
 #  HEADER
 # ─────────────────────────────────────────────
@@ -1099,6 +1217,56 @@ with st.sidebar:
         {expiry_html}{expired_html}
     </div>
     """, unsafe_allow_html=True)
+
+    # ── Pro/Enterprise features list in sidebar ──
+    if current_plan in ("pro", "enterprise"):
+        _pro_features = [
+            ("🚀", "Unlimited Training"),
+            ("🔄", "10-fold Cross Validation"),
+            ("🤖", "34 Algorithms"),
+            ("📊", "5,000 rows support"),
+            ("⚡", "XGBoost, LightGBM, CatBoost"),
+        ]
+        if current_plan == "enterprise":
+            _pro_features += [("♾️", "Unlimited rows"), ("🏢", "Custom Pipelines")]
+        _feats_html = "".join(f'<div style="display:flex;align-items:center;gap:.5rem;padding:.25rem 0;border-bottom:1px solid {BORDER}"><span style="font-size:.9rem">{ic}</span><span style="font-size:.72rem;color:{TEXT2}">{lb}</span></div>' for ic, lb in _pro_features)
+        st.markdown(f"""
+        <div style="background:{"rgba(74,222,128,0.05)" if current_plan=="pro" else "rgba(192,132,252,0.05)"};
+                    border:1px solid {"rgba(74,222,128,0.2)" if current_plan=="pro" else "rgba(192,132,252,0.2)"};
+                    border-radius:12px;padding:.9rem 1rem;margin-bottom:.75rem">
+          <div style="font-size:.62rem;font-weight:800;text-transform:uppercase;color:{plan_color};margin-bottom:.6rem">
+            ✦ Your {current_plan.upper()} Features
+          </div>
+          {_feats_html}
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Pro Features Test Button ──
+        if st.button("🧪 Test Pro Features", key="test_pro_btn", use_container_width=True):
+            st.session_state["show_pro_test"] = True
+
+        if st.session_state.get("show_pro_test"):
+            _checks = [
+                ("XGBoost available",     "xgboost" in (ADVANCED_CLF_MODELS + ADVANCED_REG_MODELS)),
+                ("LightGBM available",    "lightgbm" in (ADVANCED_CLF_MODELS + ADVANCED_REG_MODELS)),
+                ("CatBoost available",    "catboost" in (ADVANCED_CLF_MODELS + ADVANCED_REG_MODELS)),
+                ("10-fold CV unlocked",   plan_limits["cv_folds_max"] >= 10),
+                ("Unlimited training",    plan_limits["datasets_per_day"] == 999),
+                ("Model export (.pkl)",   plan_limits["export_model"]),
+                ("Advanced models on",    plan_limits["advanced_models"]),
+            ]
+            _all_ok = all(v for _, v in _checks)
+            for label, ok in _checks:
+                color = "#4ade80" if ok else "#f87171"
+                icon  = "✅" if ok else "❌"
+                st.markdown(f'<div style="font-size:.72rem;color:{color};padding:.15rem 0">{icon} {label}</div>', unsafe_allow_html=True)
+            if _all_ok:
+                st.success("🎉 All Pro features working!")
+            else:
+                st.error("⚠️ Some features not active — contact support.")
+            if st.button("✕ Close", key="close_pro_test"):
+                st.session_state["show_pro_test"] = False
+                st.rerun()
 
     # ── Free plan usage stats ──
     if current_plan == "free":
@@ -1864,6 +2032,9 @@ if is_admin:
                     h += f'<span style="font-size:1rem;flex-shrink:0">{icon}</span>'
                     h += f'<div style="flex:1;min-width:0"><div style="font-size:.8rem;font-weight:700;color:{col};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{entry.get("subject","(no subject)")}</div>'
                     h += f'<div style="font-size:.68rem;color:{TEXT3};margin-top:.1rem">{ts}</div>'
+                    if entry.get("body_preview"):
+                        preview = entry["body_preview"].replace("\n","<br>").strip()
+                        h += f'<div style="font-size:.72rem;color:{TEXT2};margin-top:.3rem;background:rgba(255,255,255,0.04);border-radius:6px;padding:.35rem .6rem;font-family:monospace;white-space:pre-wrap">{preview}</div>'
                     if has_err:
                         h += f'<div style="font-size:.72rem;color:#f87171;margin-top:.25rem;background:rgba(248,113,113,0.07);border-radius:6px;padding:.25rem .5rem">Error: {entry.get("error","")}</div>'
                     if entry.get("note"):
@@ -2082,6 +2253,23 @@ if st.session_state.data is not None:
             if not has_advanced:
                 available_models = [m for m in available_models if m not in BLACKLISTED_FREE]
 
+            # ── PRO MODE ACTIVE banner ──
+            if has_advanced:
+                st.markdown(f"""
+                <div style="background:linear-gradient(135deg,rgba(74,222,128,0.12),rgba(96,165,250,0.08));
+                            border:1.5px solid rgba(74,222,128,0.4);border-radius:14px;
+                            padding:.9rem 1.25rem;margin:.75rem 0;display:flex;align-items:center;gap:1rem">
+                  <div style="font-size:2rem">⚡</div>
+                  <div>
+                    <div style="font-size:.9rem;font-weight:900;color:#4ade80;letter-spacing:.02em">
+                      {current_plan.upper()} MODE ACTIVE
+                    </div>
+                    <div style="font-size:.72rem;color:#9ca3af;margin-top:.15rem">
+                      All Pro features unlocked — XGBoost ✅ &nbsp; LightGBM ✅ &nbsp; CatBoost ✅ &nbsp; 10-fold CV ✅ &nbsp; Unlimited training ✅
+                    </div>
+                  </div>
+                </div>""", unsafe_allow_html=True)
+
             st.markdown(f"""
             <div style="background:{"rgba(255,255,255,0.03)" if T=="dark" else "rgba(0,0,0,0.03)"};border:1px solid {BORDER};border-radius:12px;padding:1rem 1.25rem;margin:.75rem 0">
               <span class="insight-chip" style="border-color:{plan_color};color:{plan_color}">{plan_icon} {current_plan.upper()} Plan</span>
@@ -2237,7 +2425,21 @@ if st.session_state.data is not None:
                             f"✅ Training complete in **{fmt_time(elapsed)}** "
                             f"({trained_rows:,} rows) — 🏆 Check the Results tab!"
                         )
-                        if not has_advanced:
+                        if has_advanced:
+                            # Show which pro features were actually used
+                            _pro_models_used = [m for m in include_models if m in ["xgboost","lightgbm","catboost"]]
+                            _pro_chips = " &nbsp; ".join([f'<span style="background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.4);border-radius:6px;padding:.2rem .6rem;font-size:.72rem;font-weight:800">{m.title()} ✓ PRO</span>' for m in _pro_models_used])
+                            st.markdown(f"""
+                            <div style="background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.25);
+                                        border-radius:10px;padding:.7rem 1rem;margin-top:.5rem">
+                              <div style="font-size:.7rem;font-weight:800;color:#4ade80;margin-bottom:.4rem">⚡ PRO FEATURES USED THIS TRAINING</div>
+                              <div style="display:flex;flex-wrap:wrap;gap:.4rem">
+                                {_pro_chips}
+                                <span style="background:rgba(96,165,250,0.15);color:#60a5fa;border:1px solid rgba(96,165,250,0.4);border-radius:6px;padding:.2rem .6rem;font-size:.72rem;font-weight:800">10-fold CV ✓ PRO</span>
+                                <span style="background:rgba(192,132,252,0.15);color:#c084fc;border:1px solid rgba(192,132,252,0.4);border-radius:6px;padding:.2rem .6rem;font-size:.72rem;font-weight:800">Unlimited Training ✓ PRO</span>
+                              </div>
+                            </div>""", unsafe_allow_html=True)
+                        else:
                             st.info("💡 Upgrade to Pro for XGBoost, LightGBM, and CatBoost!")
                         st.balloons()
 
@@ -2292,6 +2494,20 @@ if st.session_state.data is not None:
                 <div class="ts-value">{top_score:.4f}</div>
               </div>
             </div>""", unsafe_allow_html=True)
+
+            # ── Pro algorithms used badge ──
+            if has_advanced:
+                _pro_in_results = [m for m in res_df[model_col].tolist() if any(p in str(m).lower() for p in ["xgboost","lightgbm","catboost","gradient"])]
+                _best_is_pro = any(p in str(best_name).lower() for p in ["xgboost","lightgbm","catboost","gradient"])
+                _pro_count = len(_pro_in_results)
+                st.markdown(f"""
+                <div style="background:rgba(74,222,128,0.06);border:1px solid rgba(74,222,128,0.2);
+                            border-radius:10px;padding:.6rem 1rem;margin-bottom:.75rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+                  <span style="font-size:.75rem;font-weight:800;color:#4ade80">⚡ PRO RESULTS</span>
+                  <span style="font-size:.72rem;color:#9ca3af">{_pro_count} Pro algorithms competed in this run</span>
+                  {"<span style='background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.4);border-radius:6px;padding:.15rem .5rem;font-size:.7rem;font-weight:800'>🏆 Best model is a PRO algorithm!</span>" if _best_is_pro else ""}
+                  <span style="font-size:.7rem;color:#6b7280">XGBoost ✓ · LightGBM ✓ · CatBoost ✓ · {folds_used}-fold CV ✓</span>
+                </div>""", unsafe_allow_html=True)
 
             ex1, ex2, ex3 = st.columns(3)
             with ex1:
