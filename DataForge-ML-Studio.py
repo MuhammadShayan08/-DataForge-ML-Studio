@@ -7,7 +7,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from pycaret.classification import (
-    setup as clf_setup, compare_models as clf_compare,
+    setup as clf_setup, compare_models as clf_compare, 
     pull as clf_pull, save_model as clf_save,
 )
 from pycaret.regression import (
