@@ -37,7 +37,21 @@ import json as _json
 
 def generate_notebook(df, target_col, problem_type, results_df, best_model_name,
                       top_score, metric_name, dataset_name, training_time, fold,
-                      normalize, train_size):
+                      normalize, train_size,
+                      eda_selections=None, pre_selections=None,
+                      train_selections=None, export_selections=None):
+    """
+    User ke selections ke mutabiq notebook banata hai.
+    eda_selections, pre_selections, train_selections, export_selections
+    — dicts hain jisme True/False values hain.
+    Agar None hain toh sab kuch include hoga (default behaviour).
+    """
+    # ── Default: agar koi selection nahi di toh sab ON ──
+    eda  = eda_selections   or {"distributions":True,"correlation":True,"missing":True,"target_dist":True,"boxplots":True,"scatter_matrix":True,"cat_bars":True,"outlier_plot":True}
+    pre  = pre_selections   or {"drop_dups":True,"handle_missing":True,"normalize":True,"remove_outliers":False}
+    trn  = train_selections or {"model_table":True,"bar_chart":True,"radar_chart":True,"feature_importance":True}
+    exp  = export_selections or {"save_model":True,"load_predict":True,"summary_table":True}
+
     num_cols = df.select_dtypes(include=["number"]).columns.tolist()
     cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
     null_pct = round(df.isnull().sum().sum() / df.size * 100, 2)
@@ -65,6 +79,7 @@ def generate_notebook(df, target_col, problem_type, results_df, best_model_name,
 
     cells = []
 
+    # ── Section 1: Title ──
     cells.append(md_cell(f"""# ⚡ DataForge ML Studio — Auto-Generated Notebook
 
 > **Dataset:** `{dataset_name}` | **Target:** `{target_col}` | **Problem:** {problem_type.title()}
@@ -72,6 +87,7 @@ def generate_notebook(df, target_col, problem_type, results_df, best_model_name,
 
 Complete reproducible pipeline — run locally or on Google Colab.""", "title"))
 
+    # ── Section 2: Imports ──
     cells.append(md_cell("## 📦 Section 1 — Install & Import", "s1"))
     cells.append(code_cell(f"""# !pip install pycaret plotly pandas numpy openpyxl
 import pandas as pd, numpy as np, warnings
@@ -85,6 +101,7 @@ from {pm} import (
 )
 print("✅ Libraries imported!")""", "s1_imp"))
 
+    # ── Section 3: Load data ──
     cells.append(md_cell("## 📂 Section 2 — Load Dataset", "s2"))
     cells.append(code_cell(f"""# df = pd.read_csv("your_file.csv")
 # df = pd.read_excel("your_file.xlsx")
@@ -92,23 +109,36 @@ TARGET = "{target_col}"
 print(f"Shape: {{df.shape}}, Target: {{TARGET}}")
 df.head()""", "s2_load"))
 
+    # ── Section 4: Dataset overview ──
     cells.append(md_cell("## 🔍 Section 3 — Dataset Overview", "s3"))
     cells.append(code_cell(f"""print(f"Rows: {len(df):,} | Cols: {len(df.columns)} | Missing: {null_pct}% | Dups: {dup_cnt}")
 df.info()""", "s3_info"))
     cells.append(code_cell("df.describe(include='all').round(3)", "s3_desc"))
-    cells.append(code_cell("""missing = df.isnull().sum()
+
+    # ── Section 5: EDA — user selected charts only ──
+    eda_cells_added = False
+
+    if eda.get("missing"):
+        if not eda_cells_added:
+            cells.append(md_cell("## 🧬 Section 4 — EDA (Exploratory Data Analysis)", "s4"))
+            eda_cells_added = True
+        cells.append(code_cell("""# Missing values chart
+missing = df.isnull().sum()
 missing = missing[missing > 0].sort_values(ascending=False)
 if len(missing) > 0:
-    fig = px.bar(x=missing.index, y=missing.values, title="Missing Values",
+    fig = px.bar(x=missing.index, y=missing.values, title="Missing Values per Column",
                  color=missing.values, color_continuous_scale=["#4ade80","#fbbf24","#f87171"])
     fig.update_layout(template="plotly_dark", height=350)
     fig.show()
 else:
-    print("✅ No missing values!")""", "s3_miss"))
+    print("✅ No missing values found!")""", "s4_miss"))
 
-    cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
-    if num_cols:
-        cells.append(code_cell(f"""num_cols = {ncr}
+    if eda.get("distributions") and num_cols:
+        if not eda_cells_added:
+            cells.append(md_cell("## 🧬 Section 4 — EDA (Exploratory Data Analysis)", "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# Numeric distributions
+num_cols = {ncr}
 cols_to_plot = num_cols[:9]
 n_c = min(3, len(cols_to_plot))
 n_r = (len(cols_to_plot) + n_c - 1) // n_c
@@ -119,23 +149,51 @@ for i, col in enumerate(cols_to_plot):
 fig.update_layout(template="plotly_dark", height=280*n_r, title_text="Distributions", showlegend=False)
 fig.show()""", "s4_hist"))
 
-    if len(num_cols) >= 2:
-        cells.append(code_cell(f"""corr = df[{ncr}[:15]].corr().round(2)
+    if eda.get("boxplots") and num_cols:
+        if not eda_cells_added:
+            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# Box plots
+num_cols = {ncr}
+cols_bp = num_cols[:6]
+n_c = min(3, len(cols_bp))
+n_r = (len(cols_bp) + n_c - 1) // n_c
+fig = make_subplots(rows=n_r, cols=n_c, subplot_titles=cols_bp)
+for i, col in enumerate(cols_bp):
+    fig.add_trace(go.Box(y=df[col], name=col, marker_color="#60a5fa"), row=i//n_c+1, col=i%n_c+1)
+fig.update_layout(template="plotly_dark", height=280*n_r, title_text="Box Plots", showlegend=False)
+fig.show()""", "s4_box"))
+
+    if eda.get("correlation") and len(num_cols) >= 2:
+        if not eda_cells_added:
+            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# Correlation heatmap
+corr = df[{ncr}[:15]].corr().round(2)
 fig = go.Figure(go.Heatmap(z=corr.values, x=corr.columns, y=corr.index,
     colorscale=[[0,"#f87171"],[0.5,"#1c1c1c"],[1,"#4ade80"]], zmid=0,
     text=corr.values.round(2), texttemplate="%{{text}}", textfont=dict(size=9)))
 fig.update_layout(template="plotly_dark", height=520, title="Correlation Heatmap")
 fig.show()""", "s4_corr"))
 
-    if cat_cols:
-        cells.append(code_cell(f"""for col in {ccr}[:4]:
-    vc = df[col].value_counts().head(12)
-    fig = px.bar(x=vc.index.astype(str), y=vc.values, title=f"Value Counts — {{col}}",
-                 color=vc.values, color_continuous_scale=["#60a5fa","#4ade80"])
-    fig.update_layout(template="plotly_dark", height=320, showlegend=False, coloraxis_showscale=False)
-    fig.show()""", "s4_cat"))
+    if eda.get("scatter_matrix") and len(num_cols) >= 2:
+        if not eda_cells_added:
+            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# Scatter matrix
+import plotly.figure_factory as ff
+scatter_cols = {ncr}[:5]
+fig = px.scatter_matrix(df[scatter_cols], title="Scatter Matrix",
+                        color_discrete_sequence=["#4ade80"])
+fig.update_layout(template="plotly_dark", height=600)
+fig.show()""", "s4_scat"))
 
-    cells.append(code_cell(f"""target_series = df["{target_col}"]
+    if eda.get("target_dist"):
+        if not eda_cells_added:
+            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# Target column distribution
+target_series = df["{target_col}"]
 if "{problem_type}" == "classification":
     vc = target_series.value_counts()
     fig = px.pie(values=vc.values, names=vc.index.astype(str),
@@ -148,34 +206,104 @@ else:
 fig.update_layout(template="plotly_dark", height=380)
 fig.show()""", "s4_tgt"))
 
-    cells.append(md_cell("## 🧹 Section 5 — Preprocessing", "s5"))
-    cells.append(code_cell(f"""before = len(df)
+    if eda.get("cat_bars") and cat_cols:
+        if not eda_cells_added:
+            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# Categorical column bar charts
+cat_cols = {ccr}
+for col in cat_cols[:4]:
+    vc = df[col].value_counts().head(12)
+    fig = px.bar(x=vc.index.astype(str), y=vc.values, title=f"Value Counts — {{col}}",
+                 color=vc.values, color_continuous_scale=["#60a5fa","#4ade80"])
+    fig.update_layout(template="plotly_dark", height=320, showlegend=False, coloraxis_showscale=False)
+    fig.show()""", "s4_cat"))
+
+    if eda.get("outlier_plot") and num_cols:
+        if not eda_cells_added:
+            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# Outlier detection (IQR method)
+num_cols = {ncr}
+outlier_info = []
+for col in num_cols:
+    Q1, Q3 = df[col].quantile(0.25), df[col].quantile(0.75)
+    IQR = Q3 - Q1
+    n_out = ((df[col] < Q1 - 1.5*IQR) | (df[col] > Q3 + 1.5*IQR)).sum()
+    outlier_info.append({{"column": col, "outliers": int(n_out), "pct": round(n_out/len(df)*100, 2)}})
+out_df = pd.DataFrame(outlier_info).sort_values("outliers", ascending=False)
+fig = px.bar(out_df, x="column", y="pct", title="Outlier % per Column (IQR method)",
+             color="pct", color_continuous_scale=["#4ade80","#fbbf24","#f87171"])
+fig.update_layout(template="plotly_dark", height=380)
+fig.show()
+print(out_df.to_string(index=False))""", "s4_out"))
+
+    # ── Section 6: Preprocessing — user selected steps only ──
+    pre_steps = []
+    if pre.get("drop_dups"):
+        pre_steps.append("""# Drop duplicate rows
+before = len(df)
 df = df.drop_duplicates().reset_index(drop=True)
-print(f"Duplicates removed: {{before - len(df)}} | Final shape: {{df.shape}}")
+print(f"Duplicates removed: {before - len(df)} | Shape: {df.shape}")""")
+
+    if pre.get("handle_missing"):
+        pre_steps.append("""# Handle missing values — show summary
 nc = df.isnull().sum()
 nc = nc[nc > 0]
-print("Missing cols:", nc.to_string() if len(nc) else "None ✅")""", "s5_clean"))
+print("Missing cols before:", nc.to_string() if len(nc) else "None ✅")
+# PyCaret handles imputation automatically in setup()""")
 
+    if pre.get("normalize"):
+        pre_steps.append(f"""# Normalization — handled by PyCaret setup (normalize={normalize})
+# Will be applied via {sp}_setup(normalize=True)
+print("✅ Normalization: will be applied in PyCaret setup")""")
+
+    if pre.get("remove_outliers") and problem_type == "regression":
+        pre_steps.append("""# Remove outliers (regression only — IQR method)
+from scipy import stats
+num_cols_pre = df.select_dtypes(include='number').columns.drop('target', errors='ignore')
+z_scores = stats.zscore(df[num_cols_pre].fillna(df[num_cols_pre].median()))
+df = df[(abs(z_scores) < 3).all(axis=1)].reset_index(drop=True)
+print(f"After outlier removal: {df.shape}")""")
+
+    if pre_steps:
+        cells.append(md_cell("## 🧹 Section 5 — Preprocessing", "s5"))
+        for i, step_code in enumerate(pre_steps):
+            cells.append(code_cell(step_code, f"s5_pre{i}"))
+
+    # ── Section 7: Training ──
     cells.append(md_cell(f"""## ⚙️ Section 6 — AutoML Training (PyCaret)
 
-Same config DataForge used: **{problem_type}** | train_size=`{train_size}` | fold=`{fold}` | normalize=`{normalize}`""", "s6"))
+Config: **{problem_type}** | train_size=`{train_size}` | fold=`{fold}` | normalize=`{normalize}`""", "s6"))
 
     cells.append(code_cell(f"""{sp}_setup(data=df, target="{target_col}", train_size={train_size},
            fold={fold}, normalize={normalize}, verbose=True, session_id=42, n_jobs=-1)
 print("✅ PyCaret setup complete!")""", "s6_setup"))
 
-    cells.append(code_cell(f"""# ☕ Grab a coffee — this might take a few minutes
+    cells.append(code_cell(f"""# ☕ This might take a few minutes
 best_model = {sp}_compare(verbose=True, n_select=1)
 results = {sp}_pull()
 print("\\n✅ Done! Best model:", best_model)""", "s6_cmp"))
 
-    cells.append(md_cell("## 🏆 Section 7 — Results & Visualizations", "s7"))
-    cells.append(code_cell(f"""# DataForge session results:
+    # ── Section 8: Results — user selected charts only ──
+    results_added = False
+
+    if trn.get("model_table"):
+        if not results_added:
+            cells.append(md_cell("## 🏆 Section 7 — Results & Visualizations", "s7"))
+            results_added = True
+        cells.append(code_cell(f"""# All models comparison table
+print("DataForge session results:")
 print(\"\"\"{rs}\"\"\")
 results_df = {sp}_pull()
 results_df""", "s7_res"))
 
-    cells.append(code_cell(f"""results_df = {sp}_pull()
+    if trn.get("bar_chart"):
+        if not results_added:
+            cells.append(md_cell("## 🏆 Section 7 — Results & Visualizations", "s7"))
+            results_added = True
+        cells.append(code_cell(f"""# Top models bar chart
+results_df = {sp}_pull()
 mc = results_df.select_dtypes(include='number').columns[0]
 ml = results_df.columns[0]
 top6 = results_df.head(6)
@@ -187,7 +315,12 @@ fig.update_layout(template="plotly_dark", height=380,
     title=f"Top Models — {{mc}}", yaxis=dict(autorange="reversed"))
 fig.show()""", "s7_bar"))
 
-    cells.append(code_cell(f"""results_df = {sp}_pull()
+    if trn.get("radar_chart"):
+        if not results_added:
+            cells.append(md_cell("## 🏆 Section 7 — Results & Visualizations", "s7"))
+            results_added = True
+        cells.append(code_cell(f"""# Best model metrics radar chart
+results_df = {sp}_pull()
 nm = results_df.select_dtypes(include='number').columns[:6].tolist()
 bv = results_df.iloc[0][nm]
 norm = (bv - bv.min()) / (bv.max() - bv.min() + 1e-9)
@@ -200,21 +333,57 @@ fig.update_layout(template="plotly_dark", height=400,
     polar=dict(radialaxis=dict(visible=True, range=[0,1])))
 fig.show()""", "s7_radar"))
 
-    cells.append(md_cell("## 💾 Section 8 — Save & Load Model", "s8"))
-    cells.append(code_cell(f"""{sp}_save(best_model, "best_model_dataforge")
+    if trn.get("feature_importance"):
+        if not results_added:
+            cells.append(md_cell("## 🏆 Section 7 — Results & Visualizations", "s7"))
+            results_added = True
+        cells.append(code_cell(f"""# Feature importance plot
+try:
+    import matplotlib.pyplot as plt
+    from pycaret.{problem_type} import plot_model
+    plot_model(best_model, plot="feature", display_format="streamlit")
+except Exception:
+    # Manual feature importance via sklearn
+    try:
+        importances = best_model.feature_importances_
+        feature_names = df.drop(columns=["{target_col}"]).columns.tolist()
+        fi_df = pd.DataFrame({{"feature": feature_names, "importance": importances}})
+        fi_df = fi_df.sort_values("importance", ascending=True).tail(15)
+        fig = px.bar(fi_df, x="importance", y="feature", orientation="h",
+                     title="Feature Importance — {best_model_name}",
+                     color="importance", color_continuous_scale=["#60a5fa","#4ade80"])
+        fig.update_layout(template="plotly_dark", height=450)
+        fig.show()
+    except Exception as e:
+        print(f"Feature importance not available for this model: {{e}}")""", "s7_feat"))
+
+    # ── Section 9: Export — user selected options only ──
+    export_added = False
+
+    if exp.get("save_model"):
+        if not export_added:
+            cells.append(md_cell("## 💾 Section 8 — Save & Load Model", "s8"))
+            export_added = True
+        cells.append(code_cell(f"""{sp}_save(best_model, "best_model_dataforge")
 print("✅ Saved: best_model_dataforge.pkl")""", "s8_save"))
-    cells.append(code_cell(f"""loaded_model = {sp}_load("best_model_dataforge")
+
+    if exp.get("load_predict"):
+        if not export_added:
+            cells.append(md_cell("## 💾 Section 8 — Save & Load Model", "s8"))
+            export_added = True
+        cells.append(code_cell(f"""loaded_model = {sp}_load("best_model_dataforge")
 print("✅ Loaded:", type(loaded_model))
 
-# Predict on new data:
+# Make predictions on new data:
 # from {pm} import predict_model
 # df_new = df.drop(columns=[TARGET]).head(5)
 # preds = predict_model(loaded_model, data=df_new)
 # print(preds)""", "s8_load"))
 
-    cells.append(md_cell(f"""## 📋 Section 9 — Summary
+    if exp.get("summary_table"):
+        cells.append(md_cell(f"""## 📋 Section 9 — Session Summary
 
-| | |
+| Property | Value |
 |---|---|
 | Dataset | `{dataset_name}` |
 | Target | `{target_col}` |
@@ -224,10 +393,13 @@ print("✅ Loaded:", type(loaded_model))
 | CV Folds | {fold} |
 | Training Time | {training_time:.1f}s |
 | Train Split | {int(train_size*100)}% / {int((1-train_size)*100)}% |
+| Normalize | {normalize} |
 
-**Next Steps:** `tune_model()` → `interpret_model()` → `ensemble_model()` → Deploy with FastAPI
+**EDA included:** {", ".join(k for k,v in (eda or {}).items() if v) or "None"}
+**Preprocessing:** {", ".join(k for k,v in (pre or {}).items() if v) or "None"}
+**Result charts:** {", ".join(k for k,v in (trn or {}).items() if v) or "None"}
 
-> Generated by **DataForge ML Studio** ⚡""", "s9"))
+> Generated by **DataForge ML Studio** ⚡ — Notebook Builder""", "s9"))
 
     notebook = {
         "nbformat": 4, "nbformat_minor": 5,
@@ -1043,6 +1215,10 @@ if st.session_state.data is not None:
                         fold            = st.session_state.cv_fold or 5,
                         normalize       = True,
                         train_size      = 0.8,
+                        eda_selections  = st.session_state.get("nb_eda"),
+                        pre_selections  = st.session_state.get("nb_pre"),
+                        train_selections= st.session_state.get("nb_train"),
+                        export_selections=st.session_state.get("nb_export"),
                     )
                     safe_name = str(st.session_state.dataset_name or "dataset").replace(" ","_").replace(".","_")
                     st.download_button(
@@ -1411,6 +1587,10 @@ if st.session_state.data is not None:
                                     fold            = st.session_state.cv_fold or 5,
                                     normalize       = pre.get("normalize", True),
                                     train_size      = 0.8,
+                                    eda_selections  = st.session_state.nb_eda,
+                                    pre_selections  = st.session_state.nb_pre,
+                                    train_selections= st.session_state.nb_train,
+                                    export_selections=st.session_state.nb_export,
                                 )
                                 safe_nm = str(st.session_state.dataset_name or "dataset").replace(" ","_").replace(".","_")
                                 st.download_button(
