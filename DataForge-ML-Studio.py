@@ -626,9 +626,9 @@ if st.session_state.data is not None:
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = df.select_dtypes(include=["object","category"]).columns.tolist()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📊  Data Explorer", "🧬  EDA & Insights", "⚙️  Train Model",
-        "🏆  Results", "📜  History"
+        "🏆  Results", "📜  History", "📓  Notebook Builder"
     ])
 
     # ═══════════════════════════
@@ -1124,6 +1124,311 @@ if st.session_state.data is not None:
             tlog_df = pd.DataFrame(training_log)
             st.download_button("📥 Export History CSV", tlog_df.to_csv(index=False),
                                "training_history.csv", "text/csv")
+
+    # ═══════════════════════════════════════════
+    # TAB 6 — NOTEBOOK BUILDER
+    # ═══════════════════════════════════════════
+    with tab6:
+
+        # ── Session state init for notebook builder ──
+        if "nb_step" not in st.session_state:
+            st.session_state.nb_step = 1
+        if "nb_ptype" not in st.session_state:
+            st.session_state.nb_ptype = st.session_state.problem_type or "classification"
+        if "nb_eda" not in st.session_state:
+            st.session_state.nb_eda = {
+                "distributions": True, "correlation": True, "missing": True,
+                "target_dist": True, "boxplots": False, "scatter_matrix": False,
+                "cat_bars": False, "outlier_plot": False,
+            }
+        if "nb_pre" not in st.session_state:
+            st.session_state.nb_pre = {
+                "drop_dups": True, "handle_missing": True,
+                "normalize": True, "remove_outliers": False,
+            }
+        if "nb_train" not in st.session_state:
+            st.session_state.nb_train = {
+                "model_table": True, "bar_chart": True,
+                "radar_chart": True, "feature_importance": False,
+            }
+        if "nb_export" not in st.session_state:
+            st.session_state.nb_export = {
+                "save_model": True, "load_predict": True, "summary_table": True,
+            }
+
+        step = st.session_state.nb_step
+
+        # ── Step indicator CSS ──
+        st.markdown(f"""
+        <style>
+        .nb-step-row{{display:flex;gap:14px;margin-bottom:20px;align-items:flex-start;}}
+        .nb-dot{{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.8rem;font-weight:700;flex-shrink:0;margin-top:2px;}}
+        .nb-dot-done{{background:{"rgba(74,222,128,0.15)" if T=="dark" else "rgba(74,222,128,0.20)"};color:#4ade80;border:2px solid #4ade80;}}
+        .nb-dot-active{{background:{"rgba(96,165,250,0.15)" if T=="dark" else "rgba(96,165,250,0.15)"};color:#60a5fa;border:2px solid #60a5fa;animation:nb-pulse 1.5s infinite;}}
+        .nb-dot-idle{{background:{BG3};color:{TEXT3};border:2px solid {BORDER};}}
+        @keyframes nb-pulse{{0%,100%{{box-shadow:0 0 0 0 rgba(96,165,250,0.4)}}50%{{box-shadow:0 0 0 7px transparent}}}}
+        .nb-line{{width:2px;min-height:16px;margin:3px auto;}}
+        .nb-line-done{{background:#4ade80;}}
+        .nb-line-idle{{background:{BORDER};}}
+        .nb-step-title{{font-size:.95rem;font-weight:700;color:{TEXT1};padding-top:5px;}}
+        .nb-step-title-idle{{font-size:.95rem;font-weight:600;color:{TEXT3};padding-top:5px;}}
+        .nb-chip-grid{{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}}
+        .nb-chip-on{{display:inline-flex;align-items:center;gap:5px;padding:5px 13px;border-radius:8px;font-size:.78rem;font-weight:600;background:{"rgba(74,222,128,0.12)" if T=="dark" else "rgba(74,222,128,0.15)"};color:#4ade80;border:1px solid rgba(74,222,128,0.4);cursor:pointer;}}
+        .nb-chip-off{{display:inline-flex;align-items:center;gap:5px;padding:5px 13px;border-radius:8px;font-size:.78rem;font-weight:600;background:{BG3};color:{TEXT3};border:1px solid {BORDER};cursor:pointer;}}
+        .nb-toggle-row{{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid {BORDER};}}
+        .nb-toggle-row:last-child{{border-bottom:none;}}
+        .nb-tgl-label{{font-size:.85rem;font-weight:600;color:{TEXT1};}}
+        .nb-tgl-sub{{font-size:.72rem;color:{TEXT3};margin-top:2px;}}
+        .nb-card{{background:{CARD_BG};border:1px solid {BORDER};border-radius:14px;padding:1rem 1.25rem;margin-top:10px;}}
+        </style>
+        """, unsafe_allow_html=True)
+
+        # ── Header ──
+        st.markdown(f"""
+        <div class="section-head"><div class="icon-wrap">📓</div><h3>Notebook Builder</h3></div>
+        <div style="font-size:.85rem;color:{TEXT2};margin-bottom:1.5rem">
+          Step-by-step select karo kya kya notebook mein add karna hai — phir ek click mein complete <b>.ipynb</b> download hoga.
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ────────────────────────────────
+        # STEP 1 — Problem Type
+        # ────────────────────────────────
+        def dot(n):
+            if n < step: return f'<div class="nb-dot nb-dot-done">✓</div>'
+            elif n == step: return f'<div class="nb-dot nb-dot-active">{n}</div>'
+            else: return f'<div class="nb-dot nb-dot-idle">{n}</div>'
+
+        def line(n):
+            cls = "nb-line-done" if n < step else "nb-line-idle"
+            return f'<div class="nb-line {cls}" style="height:12px"></div>'
+
+        # Step 1
+        with st.container():
+            col_dot, col_body = st.columns([1, 12])
+            with col_dot:
+                st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(1)}{line(1)}</div>', unsafe_allow_html=True)
+            with col_body:
+                if step >= 1:
+                    st.markdown(f'<div class="nb-step-title">Problem type select karo</div>', unsafe_allow_html=True)
+                    ptype_options = ["Classification", "Regression"]
+                    current_ptype = "Classification" if st.session_state.nb_ptype == "classification" else "Regression"
+                    chosen = st.radio("Problem type", ptype_options, index=ptype_options.index(current_ptype),
+                                      horizontal=True, label_visibility="collapsed", key="nb_ptype_radio")
+                    st.session_state.nb_ptype = "classification" if chosen == "Classification" else "regression"
+                    if step == 1:
+                        if st.button("Continue →", key="nb_next1"):
+                            st.session_state.nb_step = 2; st.rerun()
+                else:
+                    st.markdown(f'<div class="nb-step-title-idle">Problem type select karo</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+        # Step 2 — EDA Charts
+        with st.container():
+            col_dot, col_body = st.columns([1, 12])
+            with col_dot:
+                st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(2)}{line(2)}</div>', unsafe_allow_html=True)
+            with col_body:
+                if step >= 2:
+                    st.markdown(f'<div class="nb-step-title">EDA — charts select karo</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin:.4rem 0 .75rem">Jo charts chahiye notebook mein, woh ON karo:</div>', unsafe_allow_html=True)
+
+                    eda = st.session_state.nb_eda
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        eda["distributions"] = st.checkbox("📊 Distributions histogram", value=eda["distributions"], key="eda_dist")
+                        eda["correlation"]   = st.checkbox("🔥 Correlation heatmap",     value=eda["correlation"],   key="eda_corr")
+                        eda["missing"]       = st.checkbox("❓ Missing values bar chart", value=eda["missing"],       key="eda_miss")
+                        eda["target_dist"]   = st.checkbox("🎯 Target distribution",      value=eda["target_dist"],   key="eda_tgt")
+                    with ec2:
+                        eda["boxplots"]       = st.checkbox("📦 Box plots",               value=eda["boxplots"],       key="eda_box")
+                        eda["scatter_matrix"] = st.checkbox("🔵 Scatter matrix",          value=eda["scatter_matrix"], key="eda_scat")
+                        eda["cat_bars"]       = st.checkbox("📋 Category bar charts",     value=eda["cat_bars"],       key="eda_cat")
+                        eda["outlier_plot"]   = st.checkbox("⚠️ Outlier detection plot",  value=eda["outlier_plot"],   key="eda_out")
+                    st.session_state.nb_eda = eda
+
+                    selected_count = sum(1 for v in eda.values() if v)
+                    st.markdown(f'<div style="font-size:.75rem;color:{ACCENT1};margin-top:.5rem">✓ {selected_count} chart(s) selected</div>', unsafe_allow_html=True)
+
+                    if step == 2:
+                        nb2c1, nb2c2 = st.columns([1, 4])
+                        with nb2c1:
+                            if st.button("← Back", key="nb_back2"):
+                                st.session_state.nb_step = 1; st.rerun()
+                        with nb2c2:
+                            if st.button("Continue →", key="nb_next2"):
+                                st.session_state.nb_step = 3; st.rerun()
+                else:
+                    st.markdown(f'<div class="nb-step-title-idle">EDA — charts select karo</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+        # Step 3 — Preprocessing
+        with st.container():
+            col_dot, col_body = st.columns([1, 12])
+            with col_dot:
+                st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(3)}{line(3)}</div>', unsafe_allow_html=True)
+            with col_body:
+                if step >= 3:
+                    st.markdown(f'<div class="nb-step-title">Preprocessing steps</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin:.4rem 0 .75rem">Notebook mein kaunse preprocessing steps include karne hain:</div>', unsafe_allow_html=True)
+
+                    pre = st.session_state.nb_pre
+                    pre["drop_dups"]       = st.checkbox("🗑️ Drop duplicate rows",      value=pre["drop_dups"],       key="pre_dups")
+                    pre["handle_missing"]  = st.checkbox("🩹 Handle missing values",     value=pre["handle_missing"],  key="pre_miss")
+                    pre["normalize"]       = st.checkbox("⚖️ Normalize features",        value=pre["normalize"],       key="pre_norm")
+                    pre["remove_outliers"] = st.checkbox("🚫 Remove outliers (reg only)",value=pre["remove_outliers"], key="pre_out")
+                    st.session_state.nb_pre = pre
+
+                    if step == 3:
+                        nb3c1, nb3c2 = st.columns([1, 4])
+                        with nb3c1:
+                            if st.button("← Back", key="nb_back3"):
+                                st.session_state.nb_step = 2; st.rerun()
+                        with nb3c2:
+                            if st.button("Continue →", key="nb_next3"):
+                                st.session_state.nb_step = 4; st.rerun()
+                else:
+                    st.markdown(f'<div class="nb-step-title-idle">Preprocessing steps</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+        # Step 4 — Training / Results Charts
+        with st.container():
+            col_dot, col_body = st.columns([1, 12])
+            with col_dot:
+                st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(4)}{line(4)}</div>', unsafe_allow_html=True)
+            with col_body:
+                if step >= 4:
+                    st.markdown(f'<div class="nb-step-title">Training & results charts</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin:.4rem 0 .75rem">Results section mein kaunse charts add karne hain:</div>', unsafe_allow_html=True)
+
+                    tr = st.session_state.nb_train
+                    tr["model_table"]       = st.checkbox("📋 All models comparison table",  value=tr["model_table"],       key="tr_tbl")
+                    tr["bar_chart"]         = st.checkbox("📊 Top models bar chart",         value=tr["bar_chart"],         key="tr_bar")
+                    tr["radar_chart"]       = st.checkbox("🕸️ Best model metrics radar",     value=tr["radar_chart"],       key="tr_rad")
+                    tr["feature_importance"]= st.checkbox("⭐ Feature importance plot",      value=tr["feature_importance"],key="tr_feat")
+                    st.session_state.nb_train = tr
+
+                    if step == 4:
+                        nb4c1, nb4c2 = st.columns([1, 4])
+                        with nb4c1:
+                            if st.button("← Back", key="nb_back4"):
+                                st.session_state.nb_step = 3; st.rerun()
+                        with nb4c2:
+                            if st.button("Continue →", key="nb_next4"):
+                                st.session_state.nb_step = 5; st.rerun()
+                else:
+                    st.markdown(f'<div class="nb-step-title-idle">Training & results charts</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+        # Step 5 — Export + Generate
+        with st.container():
+            col_dot, col_body = st.columns([1, 12])
+            with col_dot:
+                st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(5)}</div>', unsafe_allow_html=True)
+            with col_body:
+                if step >= 5:
+                    st.markdown(f'<div class="nb-step-title">Model export & generate</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin:.4rem 0 .75rem">Final section mein kya include karna hai:</div>', unsafe_allow_html=True)
+
+                    ex = st.session_state.nb_export
+                    ex["save_model"]    = st.checkbox("💾 Save model (.pkl)",           value=ex["save_model"],    key="ex_save")
+                    ex["load_predict"]  = st.checkbox("🔮 Load model & predict example", value=ex["load_predict"],  key="ex_pred")
+                    ex["summary_table"] = st.checkbox("📋 Session summary table",        value=ex["summary_table"], key="ex_sum")
+                    st.session_state.nb_export = ex
+
+                    # ── Summary of selections ──
+                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="font-size:.8rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{TEXT3};margin-bottom:.75rem">📋 Notebook Summary</div>', unsafe_allow_html=True)
+
+                    eda   = st.session_state.nb_eda
+                    pre   = st.session_state.nb_pre
+                    train = st.session_state.nb_train
+                    expt  = st.session_state.nb_export
+
+                    eda_labels   = {"distributions":"Distributions","correlation":"Heatmap","missing":"Missing values","target_dist":"Target dist","boxplots":"Box plots","scatter_matrix":"Scatter matrix","cat_bars":"Cat bars","outlier_plot":"Outlier plot"}
+                    pre_labels   = {"drop_dups":"Drop dups","handle_missing":"Handle missing","normalize":"Normalize","remove_outliers":"Remove outliers"}
+                    train_labels = {"model_table":"Model table","bar_chart":"Bar chart","radar_chart":"Radar chart","feature_importance":"Feature importance"}
+                    exp_labels   = {"save_model":"Save model","load_predict":"Load & predict","summary_table":"Summary table"}
+
+                    def chips_html(d, labels, color):
+                        out = ""
+                        for k, v in d.items():
+                            label = labels.get(k, k)
+                            if v:
+                                out += f'<span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:6px;font-size:.72rem;font-weight:700;margin:2px;background:{"rgba(74,222,128,0.12)" if color=="green" else "rgba(96,165,250,0.12)"};color:{"#4ade80" if color=="green" else "#60a5fa"};border:1px solid {"rgba(74,222,128,0.35)" if color=="green" else "rgba(96,165,250,0.35)"}">✓ {label}</span>'
+                            else:
+                                out += f'<span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:6px;font-size:.72rem;margin:2px;background:{BG3};color:{TEXT3};border:1px solid {BORDER}">✗ {label}</span>'
+                        return out
+
+                    sum_sections = [
+                        (f"🎯 Problem type", f'<span style="color:{ACCENT1};font-weight:700">{st.session_state.nb_ptype.title()}</span>'),
+                        ("🧬 EDA charts",    chips_html(eda,   eda_labels,   "green")),
+                        ("🧹 Preprocessing", chips_html(pre,   pre_labels,   "blue")),
+                        ("🏆 Result charts", chips_html(train, train_labels, "green")),
+                        ("💾 Export",        chips_html(expt,  exp_labels,   "blue")),
+                    ]
+
+                    for section_title, content in sum_sections:
+                        st.markdown(f"""
+                        <div style="margin-bottom:.75rem">
+                          <div style="font-size:.72rem;font-weight:800;color:{TEXT3};text-transform:uppercase;letter-spacing:.06em;margin-bottom:.3rem">{section_title}</div>
+                          <div>{content}</div>
+                        </div>""", unsafe_allow_html=True)
+
+                    st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+                    # ── Back + Generate buttons ──
+                    nb5c1, nb5c2 = st.columns([1, 4])
+                    with nb5c1:
+                        if st.button("← Back", key="nb_back5"):
+                            st.session_state.nb_step = 4; st.rerun()
+
+                    with nb5c2:
+                        # Check if training has been done
+                        if st.session_state.results is not None:
+                            try:
+                                res_nb = st.session_state.results
+                                mc_nb  = "Model" if "Model" in res_nb.columns else res_nb.columns[0]
+                                nr_nb  = res_nb.select_dtypes(include=[np.number]).columns.tolist()
+                                bn_nb  = res_nb.iloc[0][mc_nb]
+                                mn_nb  = nr_nb[0] if nr_nb else "Score"
+                                ts_nb  = res_nb.iloc[0][mn_nb] if nr_nb else 0
+
+                                nb_bytes = generate_notebook(
+                                    df              = df,
+                                    target_col      = st.session_state.get("nb_target", df.columns[0]),
+                                    problem_type    = st.session_state.nb_ptype,
+                                    results_df      = res_nb,
+                                    best_model_name = bn_nb,
+                                    top_score       = ts_nb,
+                                    metric_name     = mn_nb,
+                                    dataset_name    = str(st.session_state.dataset_name or "dataset"),
+                                    training_time   = st.session_state.training_time or 0,
+                                    fold            = st.session_state.cv_fold or 5,
+                                    normalize       = pre.get("normalize", True),
+                                    train_size      = 0.8,
+                                )
+                                safe_nm = str(st.session_state.dataset_name or "dataset").replace(" ","_").replace(".","_")
+                                st.download_button(
+                                    label     = "📓 Generate & Download Notebook (.ipynb)",
+                                    data      = nb_bytes,
+                                    file_name = f"dataforge_{safe_nm}_{bn_nb.replace(' ','_')}.ipynb",
+                                    mime      = "application/x-ipynb+json",
+                                    key       = "nb_builder_download"
+                                )
+                                st.success("✅ Notebook ready! Click button to download.")
+                            except Exception as nb_err:
+                                st.error(f"❌ Error: {nb_err}")
+                        else:
+                            st.warning("⚠️ Pehle **Train Model** tab mein training complete karo — phir notebook generate hogi!")
+                            st.info("💡 Training ke baad yahan wapas aao aur **Generate** button click karo.")
+
+                else:
+                    st.markdown(f'<div class="nb-step-title-idle">Model export & generate</div>', unsafe_allow_html=True)
 
 else:
     # ── WELCOME SCREEN ──
