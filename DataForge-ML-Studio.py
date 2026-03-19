@@ -430,40 +430,91 @@ def force_gc():
     except Exception:
         pass
 
-def smart_sample(df: pd.DataFrame, target_col: str, max_rows: int = MAX_ROWS_TRAINING) -> pd.DataFrame:
+def smart_sample(df, target_col, max_rows=MAX_ROWS_TRAINING):
     if len(df) <= max_rows:
         return df
     try:
         target_series = df[target_col]
         if target_series.dtype == "object" or target_series.nunique() <= 20:
-            from sklearn.model_selection import train_test_split
-            _, sampled = train_test_split(
-                df, test_size=max_rows / len(df),
-                stratify=target_series, random_state=SAMPLE_RANDOM_STATE
-            )
-            return sampled.reset_index(drop=True)
+            class_counts = target_series.value_counts()
+            valid_classes = class_counts[class_counts >= 2].index
+            df_filtered = df[target_series.isin(valid_classes)]
+            if len(df_filtered) >= max_rows:
+                from sklearn.model_selection import train_test_split
+                _, sampled = train_test_split(
+                    df_filtered, test_size=max_rows / len(df_filtered),
+                    stratify=df_filtered[target_col], random_state=SAMPLE_RANDOM_STATE
+                )
+                return sampled.reset_index(drop=True)
     except Exception:
         pass
     return df.sample(n=max_rows, random_state=SAMPLE_RANDOM_STATE).reset_index(drop=True)
+
+
+def safe_fold_count(df, target_col, requested_fold, problem_type):
+    if problem_type != "classification":
+        return requested_fold
+    try:
+        min_class_count = df[target_col].value_counts().min()
+        safe_fold = min(requested_fold, int(min_class_count))
+        safe_fold = max(2, safe_fold)
+        return safe_fold
+    except Exception:
+        return max(2, requested_fold)
+
+
+def drop_rare_classes(df, target_col, min_count=2):
+    try:
+        class_counts = df[target_col].value_counts()
+        rare = class_counts[class_counts < min_count].index.tolist()
+        if rare:
+            df_clean = df[~df[target_col].isin(rare)].reset_index(drop=True)
+            warn = (
+                f"\u26a0\ufe0f **{len(rare)} rare class(es) removed** (less than {min_count} samples): "
+                f"`{'`, `'.join([str(r) for r in rare[:5]])}`. "
+                f"Cross-validation ke liye minimum {min_count} samples per class zaroori hain."
+            )
+            return df_clean, warn
+    except Exception:
+        pass
+    return df, None
+
 
 def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
                               normalize, remove_out, max_models=None):
     warnings_list = []
     t0 = time.time()
 
+    if problem_type == "classification":
+        df, rare_warn = drop_rare_classes(df, target_col, min_count=2)
+        if rare_warn:
+            warnings_list.append(rare_warn)
+        if len(df) < 10:
+            raise ValueError(
+                "Dataset mein bahut kam samples hain. "
+                "Target column sahi select kiya hai?"
+            )
+
     original_rows = len(df)
     if original_rows > MAX_ROWS_TRAINING:
         df_train = smart_sample(df, target_col, MAX_ROWS_TRAINING)
         warnings_list.append(
-            f"⚠️ Dataset {original_rows:,} rows — auto-sampled to **{MAX_ROWS_TRAINING:,} rows**."
+            f"\u26a0\ufe0f Dataset {original_rows:,} rows — auto-sampled to **{MAX_ROWS_TRAINING:,} rows**."
         )
     elif original_rows > MAX_ROWS_WARNING:
         df_train = df.copy()
         warnings_list.append(
-            f"💡 Dataset {original_rows:,} rows — training chalegi lekin agar crash ho toh {MAX_ROWS_WARNING:,} rows tak chota karo."
+            f"\U0001f4a1 Dataset {original_rows:,} rows — training chalegi lekin agar crash ho toh {MAX_ROWS_WARNING:,} rows tak chota karo."
         )
     else:
         df_train = df.copy()
+
+    safe_fold = safe_fold_count(df_train, target_col, fold, problem_type)
+    if safe_fold != fold:
+        warnings_list.append(
+            f"\u26a0\ufe0f **CV Folds {fold} se {safe_fold} reduce** — kuch classes mein kam samples hain. "
+            f"Training {safe_fold}-fold ke saath continue ho rahi hai."
+        )
 
     include_models = ALL_CLF_MODELS if problem_type == "classification" else ALL_REG_MODELS
 
@@ -476,7 +527,7 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
 
     setup_kwargs = dict(
         data=df_train, target=target_col,
-        train_size=float(train_size), fold=int(fold),
+        train_size=float(train_size), fold=int(safe_fold),
         normalize=normalize, verbose=False, html=False,
         session_id=42, n_jobs=1, use_gpu=False,
     )
@@ -494,6 +545,14 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
         err = str(e).lower()
         if "memory" in err or "killed" in err:
             raise MemoryError(f"Setup mein memory khatam — dataset {MAX_ROWS_WARNING:,} rows se kam karo.")
+        if "least populated" in err or "stratif" in err or "minimum number of groups" in err:
+            raise ValueError(
+                "Cross-validation error: Kuch target classes mein bohot kam samples hain.\n\n"
+                "Solutions:\n"
+                "- CV Folds slider ko 2 par set karo\n"
+                "- Un rows ko dataset se hata do jinka target value sirf 1-2 baar aata hai\n"
+                "- Ya ek alag target column choose karo"
+            )
         raise
 
     force_gc()
