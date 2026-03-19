@@ -30,6 +30,219 @@ SAMPLE_RANDOM_STATE = 42
 ALL_CLF_MODELS = ["lr","dt","rf","et","ridge","knn","nb","ada","xgboost","lightgbm","catboost","gbc","lda"]
 ALL_REG_MODELS = ["lr","dt","rf","et","ridge","lasso","knn","ada","en","xgboost","lightgbm","catboost","gbr","br"]
 
+# ─────────────────────────────────────────────
+#  NOTEBOOK GENERATOR
+# ─────────────────────────────────────────────
+import json as _json
+
+def generate_notebook(df, target_col, problem_type, results_df, best_model_name,
+                      top_score, metric_name, dataset_name, training_time, fold,
+                      normalize, train_size):
+    num_cols = df.select_dtypes(include=["number"]).columns.tolist()
+    cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+    null_pct = round(df.isnull().sum().sum() / df.size * 100, 2)
+    dup_cnt  = int(df.duplicated().sum())
+
+    def code_cell(source, cell_id=""):
+        return {"cell_type":"code","execution_count":None,
+                "id":cell_id or source[:8].replace(" ","_"),
+                "metadata":{},"outputs":[],"source":source.strip()}
+
+    def md_cell(source, cell_id=""):
+        return {"cell_type":"markdown",
+                "id":cell_id or source[:8].replace(" ","_"),
+                "metadata":{},"source":source.strip()}
+
+    sp  = "clf" if problem_type == "classification" else "reg"
+    pm  = "pycaret.classification" if problem_type == "classification" else "pycaret.regression"
+    ncr = repr(num_cols)
+    ccr = repr(cat_cols)
+
+    try:
+        rs = results_df.to_string(index=False)
+    except Exception:
+        rs = str(results_df)
+
+    cells = []
+
+    cells.append(md_cell(f"""# ⚡ DataForge ML Studio — Auto-Generated Notebook
+
+> **Dataset:** `{dataset_name}` | **Target:** `{target_col}` | **Problem:** {problem_type.title()}
+> **Best Model:** {best_model_name} | **Score ({metric_name}):** `{top_score:.4f}` | **CV Folds:** `{fold}`
+
+Complete reproducible pipeline — run locally or on Google Colab.""", "title"))
+
+    cells.append(md_cell("## 📦 Section 1 — Install & Import", "s1"))
+    cells.append(code_cell(f"""# !pip install pycaret plotly pandas numpy openpyxl
+import pandas as pd, numpy as np, warnings
+warnings.filterwarnings('ignore')
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from {pm} import (
+    setup as {sp}_setup, compare_models as {sp}_compare,
+    pull as {sp}_pull, save_model as {sp}_save, load_model as {sp}_load,
+)
+print("✅ Libraries imported!")""", "s1_imp"))
+
+    cells.append(md_cell("## 📂 Section 2 — Load Dataset", "s2"))
+    cells.append(code_cell(f"""# df = pd.read_csv("your_file.csv")
+# df = pd.read_excel("your_file.xlsx")
+TARGET = "{target_col}"
+print(f"Shape: {{df.shape}}, Target: {{TARGET}}")
+df.head()""", "s2_load"))
+
+    cells.append(md_cell("## 🔍 Section 3 — Dataset Overview", "s3"))
+    cells.append(code_cell(f"""print(f"Rows: {len(df):,} | Cols: {len(df.columns)} | Missing: {null_pct}% | Dups: {dup_cnt}")
+df.info()""", "s3_info"))
+    cells.append(code_cell("df.describe(include='all').round(3)", "s3_desc"))
+    cells.append(code_cell("""missing = df.isnull().sum()
+missing = missing[missing > 0].sort_values(ascending=False)
+if len(missing) > 0:
+    fig = px.bar(x=missing.index, y=missing.values, title="Missing Values",
+                 color=missing.values, color_continuous_scale=["#4ade80","#fbbf24","#f87171"])
+    fig.update_layout(template="plotly_dark", height=350)
+    fig.show()
+else:
+    print("✅ No missing values!")""", "s3_miss"))
+
+    cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+    if num_cols:
+        cells.append(code_cell(f"""num_cols = {ncr}
+cols_to_plot = num_cols[:9]
+n_c = min(3, len(cols_to_plot))
+n_r = (len(cols_to_plot) + n_c - 1) // n_c
+fig = make_subplots(rows=n_r, cols=n_c, subplot_titles=cols_to_plot)
+for i, col in enumerate(cols_to_plot):
+    fig.add_trace(go.Histogram(x=df[col], name=col, marker_color="#4ade80", opacity=0.8),
+                  row=i//n_c+1, col=i%n_c+1)
+fig.update_layout(template="plotly_dark", height=280*n_r, title_text="Distributions", showlegend=False)
+fig.show()""", "s4_hist"))
+
+    if len(num_cols) >= 2:
+        cells.append(code_cell(f"""corr = df[{ncr}[:15]].corr().round(2)
+fig = go.Figure(go.Heatmap(z=corr.values, x=corr.columns, y=corr.index,
+    colorscale=[[0,"#f87171"],[0.5,"#1c1c1c"],[1,"#4ade80"]], zmid=0,
+    text=corr.values.round(2), texttemplate="%{{text}}", textfont=dict(size=9)))
+fig.update_layout(template="plotly_dark", height=520, title="Correlation Heatmap")
+fig.show()""", "s4_corr"))
+
+    if cat_cols:
+        cells.append(code_cell(f"""for col in {ccr}[:4]:
+    vc = df[col].value_counts().head(12)
+    fig = px.bar(x=vc.index.astype(str), y=vc.values, title=f"Value Counts — {{col}}",
+                 color=vc.values, color_continuous_scale=["#60a5fa","#4ade80"])
+    fig.update_layout(template="plotly_dark", height=320, showlegend=False, coloraxis_showscale=False)
+    fig.show()""", "s4_cat"))
+
+    cells.append(code_cell(f"""target_series = df["{target_col}"]
+if "{problem_type}" == "classification":
+    vc = target_series.value_counts()
+    fig = px.pie(values=vc.values, names=vc.index.astype(str),
+                 title="Target Distribution — {target_col}",
+                 color_discrete_sequence=["#4ade80","#60a5fa","#c084fc","#fbbf24","#f87171"])
+else:
+    fig = px.histogram(df, x="{target_col}", nbins=40,
+                       title="Target Distribution — {target_col}",
+                       color_discrete_sequence=["#4ade80"])
+fig.update_layout(template="plotly_dark", height=380)
+fig.show()""", "s4_tgt"))
+
+    cells.append(md_cell("## 🧹 Section 5 — Preprocessing", "s5"))
+    cells.append(code_cell(f"""before = len(df)
+df = df.drop_duplicates().reset_index(drop=True)
+print(f"Duplicates removed: {{before - len(df)}} | Final shape: {{df.shape}}")
+nc = df.isnull().sum()
+nc = nc[nc > 0]
+print("Missing cols:", nc.to_string() if len(nc) else "None ✅")""", "s5_clean"))
+
+    cells.append(md_cell(f"""## ⚙️ Section 6 — AutoML Training (PyCaret)
+
+Same config DataForge used: **{problem_type}** | train_size=`{train_size}` | fold=`{fold}` | normalize=`{normalize}`""", "s6"))
+
+    cells.append(code_cell(f"""{sp}_setup(data=df, target="{target_col}", train_size={train_size},
+           fold={fold}, normalize={normalize}, verbose=True, session_id=42, n_jobs=-1)
+print("✅ PyCaret setup complete!")""", "s6_setup"))
+
+    cells.append(code_cell(f"""# ☕ Grab a coffee — this might take a few minutes
+best_model = {sp}_compare(verbose=True, n_select=1)
+results = {sp}_pull()
+print("\\n✅ Done! Best model:", best_model)""", "s6_cmp"))
+
+    cells.append(md_cell("## 🏆 Section 7 — Results & Visualizations", "s7"))
+    cells.append(code_cell(f"""# DataForge session results:
+print(\"\"\"{rs}\"\"\")
+results_df = {sp}_pull()
+results_df""", "s7_res"))
+
+    cells.append(code_cell(f"""results_df = {sp}_pull()
+mc = results_df.select_dtypes(include='number').columns[0]
+ml = results_df.columns[0]
+top6 = results_df.head(6)
+colors = ["#4ade80"] + ["#1c1c1c"] * 5
+fig = go.Figure(go.Bar(x=top6[mc], y=top6[ml], orientation="h",
+    marker_color=colors, text=top6[mc].round(4), textposition="inside",
+    textfont=dict(size=11, color="white")))
+fig.update_layout(template="plotly_dark", height=380,
+    title=f"Top Models — {{mc}}", yaxis=dict(autorange="reversed"))
+fig.show()""", "s7_bar"))
+
+    cells.append(code_cell(f"""results_df = {sp}_pull()
+nm = results_df.select_dtypes(include='number').columns[:6].tolist()
+bv = results_df.iloc[0][nm]
+norm = (bv - bv.min()) / (bv.max() - bv.min() + 1e-9)
+fig = go.Figure(go.Scatterpolar(
+    r=list(norm.values)+[norm.values[0]], theta=list(norm.index)+[norm.index[0]],
+    fill="toself", fillcolor="rgba(74,222,128,0.18)",
+    line=dict(color="#4ade80", width=2.5), marker=dict(size=6, color="#4ade80")))
+fig.update_layout(template="plotly_dark", height=400,
+    title="Best Model Metrics — {best_model_name}",
+    polar=dict(radialaxis=dict(visible=True, range=[0,1])))
+fig.show()""", "s7_radar"))
+
+    cells.append(md_cell("## 💾 Section 8 — Save & Load Model", "s8"))
+    cells.append(code_cell(f"""{sp}_save(best_model, "best_model_dataforge")
+print("✅ Saved: best_model_dataforge.pkl")""", "s8_save"))
+    cells.append(code_cell(f"""loaded_model = {sp}_load("best_model_dataforge")
+print("✅ Loaded:", type(loaded_model))
+
+# Predict on new data:
+# from {pm} import predict_model
+# df_new = df.drop(columns=[TARGET]).head(5)
+# preds = predict_model(loaded_model, data=df_new)
+# print(preds)""", "s8_load"))
+
+    cells.append(md_cell(f"""## 📋 Section 9 — Summary
+
+| | |
+|---|---|
+| Dataset | `{dataset_name}` |
+| Target | `{target_col}` |
+| Problem | {problem_type.title()} |
+| Best Model | **{best_model_name}** |
+| Score ({metric_name}) | `{top_score:.4f}` |
+| CV Folds | {fold} |
+| Training Time | {training_time:.1f}s |
+| Train Split | {int(train_size*100)}% / {int((1-train_size)*100)}% |
+
+**Next Steps:** `tune_model()` → `interpret_model()` → `ensemble_model()` → Deploy with FastAPI
+
+> Generated by **DataForge ML Studio** ⚡""", "s9"))
+
+    notebook = {
+        "nbformat": 4, "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec": {"display_name":"Python 3","language":"python","name":"python3"},
+            "language_info": {"name":"python","version":"3.10.0"}
+        },
+        "cells": cells
+    }
+    return _json.dumps(notebook, indent=2, ensure_ascii=False).encode("utf-8")
+
+
+# ─────────────────────────────────────────────
+#  MEMORY HELPERS
+# ─────────────────────────────────────────────
 def get_memory_usage_mb() -> float:
     try:
         import psutil
@@ -331,7 +544,6 @@ with _tcol2:
 #  SIDEBAR
 # ─────────────────────────────────────────────
 with st.sidebar:
-    # Free badge
     st.markdown(f"""
     <div style="background:{"rgba(74,222,128,0.08)" if T=="dark" else "#ffffff"};border:1px solid {"rgba(74,222,128,0.30)" if T=="dark" else "#dddddd"};border-radius:12px;padding:1rem 1.25rem;margin-bottom:1rem;text-align:center">
       <div style="font-size:1.5rem;margin-bottom:.3rem">🎁</div>
@@ -599,7 +811,6 @@ if st.session_state.data is not None:
 
             available_models = ALL_CLF_MODELS if ptype == "classification" else ALL_REG_MODELS
 
-            # All features unlocked banner
             st.markdown(f"""
             <div style="background:linear-gradient(135deg,rgba(74,222,128,0.12),rgba(96,165,250,0.08));
                         border:1.5px solid rgba(74,222,128,0.4);border-radius:14px;
@@ -722,7 +933,6 @@ if st.session_state.data is not None:
                     for w in warn_msgs:
                         warn_box.warning(w)
 
-                    # Save to session history
                     if "training_history" not in st.session_state:
                         st.session_state.training_history = []
                     try:
@@ -800,7 +1010,8 @@ if st.session_state.data is not None:
               </div>
             </div>""", unsafe_allow_html=True)
 
-            ex1, ex2 = st.columns(2)
+            # ── Download buttons: 3 columns ──
+            ex1, ex2, ex3 = st.columns(3)
             with ex1:
                 st.download_button("📥 Export Results CSV", res_df.to_csv(index=False),
                                    f"results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv", "text/csv")
@@ -817,6 +1028,32 @@ if st.session_state.data is not None:
                     )
                 else:
                     st.info("💾 Model file generates after training. Re-train to get it.")
+            with ex3:
+                try:
+                    nb_bytes = generate_notebook(
+                        df              = df,
+                        target_col      = target_col,
+                        problem_type    = st.session_state.problem_type,
+                        results_df      = res_df,
+                        best_model_name = best_name,
+                        top_score       = top_score,
+                        metric_name     = metric_name,
+                        dataset_name    = str(st.session_state.dataset_name or "dataset"),
+                        training_time   = st.session_state.training_time or 0,
+                        fold            = st.session_state.cv_fold or 5,
+                        normalize       = True,
+                        train_size      = 0.8,
+                    )
+                    safe_name = str(st.session_state.dataset_name or "dataset").replace(" ","_").replace(".","_")
+                    st.download_button(
+                        label     = "📓 Download Notebook (.ipynb)",
+                        data      = nb_bytes,
+                        file_name = f"dataforge_{safe_name}_{best_name.replace(' ','_')}.ipynb",
+                        mime      = "application/x-ipynb+json",
+                        help      = "Complete Jupyter Notebook — EDA + Training + Results + Model Export"
+                    )
+                except Exception as nb_err:
+                    st.error(f"Notebook generation failed: {nb_err}")
 
             st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
             st.markdown(f"""<div class="section-head"><div class="icon-wrap">📋</div><h3>All Models Ranked</h3></div>""", unsafe_allow_html=True)
@@ -915,12 +1152,11 @@ else:
 
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-    # Free features highlight
     st.markdown(f"""
     <div style="background:{"rgba(74,222,128,0.06)" if T=="dark" else "rgba(124,58,237,0.06)"};border:2px solid {"rgba(74,222,128,0.25)" if T=="dark" else "rgba(124,58,237,0.25)"};border-radius:20px;padding:2rem;text-align:center;margin-bottom:2rem">
       <div style="font-size:1.4rem;font-weight:900;background:{HERO_H1_GRAD};-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:1rem">🎁 Everything Free. No Login. No Limits.</div>
       <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:.75rem">
-        {"".join(f'<span class="insight-chip" style="border-color:{ACCENT1};color:{ACCENT1}">{f}</span>' for f in ["✅ XGBoost","✅ LightGBM","✅ CatBoost","✅ 10-fold CV","✅ Model Export (.pkl)","✅ 13+ Algorithms","✅ Unlimited Training","✅ No Sign-up Required"])}
+        {"".join(f'<span class="insight-chip" style="border-color:{ACCENT1};color:{ACCENT1}">{f}</span>' for f in ["✅ XGBoost","✅ LightGBM","✅ CatBoost","✅ 10-fold CV","✅ Model Export (.pkl)","✅ Notebook Export (.ipynb)","✅ 13+ Algorithms","✅ No Sign-up Required"])}
       </div>
     </div>
     <div style="text-align:center;color:{TEXT3};font-size:.82rem;padding-bottom:1.5rem">
