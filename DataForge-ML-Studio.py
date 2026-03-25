@@ -1699,15 +1699,15 @@ if st.session_state.data is not None:
 
                     a1, a2 = st.columns(2)
                     with a1:
-                        st.session_state.author_name  = st.text_input("👤 Your Name",        value=st.session_state.author_name,  placeholder="e.g. Muhammad Shayan",      key="inp_aname")
-                        st.session_state.author_email = st.text_input("📧 Email",             value=st.session_state.author_email, placeholder="you@email.com",              key="inp_aemail")
-                        st.session_state.author_linkedin = st.text_input("🔗 LinkedIn URL",   value=st.session_state.author_linkedin, placeholder="https://linkedin.com/in/...", key="inp_alinkedin")
-                        st.session_state.author_github = st.text_input("💻 GitHub URL",      value=st.session_state.author_github, placeholder="https://github.com/...",    key="inp_agithub")
+                        st.text_input("👤 Your Name",         placeholder="e.g. Muhammad Shayan",        key="author_name")
+                        st.text_input("📧 Email",              placeholder="you@email.com",               key="author_email")
+                        st.text_input("🔗 LinkedIn URL",       placeholder="https://linkedin.com/in/...", key="author_linkedin")
+                        st.text_input("💻 GitHub URL",         placeholder="https://github.com/...",      key="author_github")
                     with a2:
-                        st.session_state.author_title = st.text_input("💼 Your Title",        value=st.session_state.author_title,  placeholder="e.g. AI Engineer & Developer", key="inp_atitle")
-                        st.session_state.author_quote = st.text_input("💡 Favorite Quote",    value=st.session_state.author_quote,  placeholder="e.g. Errors don't stop me...", key="inp_aquote")
-                        st.session_state.author_kaggle = st.text_input("🧠 Kaggle Profile URL", value=st.session_state.author_kaggle, placeholder="https://kaggle.com/...",  key="inp_akaggle")
-                        st.session_state.author_facebook = st.text_input("📘 Facebook URL",   value=st.session_state.author_facebook, placeholder="https://facebook.com/...", key="inp_afacebook")
+                        st.text_input("💼 Your Title",         placeholder="e.g. AI Engineer & Developer",key="author_title")
+                        st.text_input("💡 Favorite Quote",     placeholder="e.g. Errors don't stop me...",key="author_quote")
+                        st.text_input("🧠 Kaggle Profile URL", placeholder="https://kaggle.com/...",      key="author_kaggle")
+                        st.text_input("📘 Facebook URL",       placeholder="https://facebook.com/...",    key="author_facebook")
 
                     if step == 5:
                         nb5c1, nb5c2 = st.columns([1, 4])
