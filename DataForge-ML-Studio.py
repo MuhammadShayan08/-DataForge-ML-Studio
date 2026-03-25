@@ -742,7 +742,7 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
         if rare_warn:
             warnings_list.append(rare_warn)
         if len(df) < 10:
-            raise ValueError("There are very few samples in the dataset. Have you selected the correct target column?")
+            raise ValueError("Dataset mein bahut kam samples hain. Target column sahi select kiya hai?")
 
     original_rows = len(df)
     if original_rows > MAX_ROWS_TRAINING:
@@ -961,6 +961,14 @@ div[data-testid="column"]:nth-child(3) .stButton>button:hover{{border-color:{ACC
 .stAlert{{border-radius:12px !important;border-left-width:4px !important;background:{CARD_BG} !important;}}
 @keyframes slideUp{{from{{opacity:0;transform:translateY(18px)}}to{{opacity:1;transform:none}}}}
 .slide-up{{animation:slideUp .45s ease-out both;}}
+.rating-card{{background:{CARD_BG};border:1px solid {BORDER};border-radius:20px;padding:1.75rem 2rem;margin-top:1.25rem;position:relative;overflow:hidden;}}
+.rating-card::before{{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#667eea,#f093fb,#4ade80);}}
+.star-row{{display:flex;gap:8px;justify-content:center;margin:.75rem 0;}}
+.star-btn{{font-size:2.2rem;background:none;border:none;cursor:pointer;transition:transform .15s ease,filter .15s ease;line-height:1;padding:4px;}}
+.star-btn:hover{{transform:scale(1.25);filter:drop-shadow(0 0 8px #fbbf24);}}
+.star-btn.active{{transform:scale(1.15);filter:drop-shadow(0 0 6px #fbbf24);}}
+.rating-submitted{{background:linear-gradient(135deg,rgba(74,222,128,0.10),rgba(96,165,250,0.06));border:2px solid rgba(74,222,128,0.35);border-radius:16px;padding:1.5rem;text-align:center;margin-top:1rem;}}
+@keyframes starPop{{0%{{transform:scale(1)}}40%{{transform:scale(1.4)}}70%{{transform:scale(.9)}}100%{{transform:scale(1.15)}}}}
 
 </style>
 """, unsafe_allow_html=True)
@@ -1547,6 +1555,7 @@ if st.session_state.data is not None:
             ("author_email",""), ("author_linkedin",""), ("author_github",""),
             ("author_kaggle",""), ("author_facebook",""),
             ("nb_last_bytes", None), ("nb_last_filename",""),
+            ("rating_submitted", False), ("rating_stars", 0), ("rating_feedback",""),
         ]:
             if k not in st.session_state:
                 st.session_state[k] = v
@@ -1792,6 +1801,90 @@ if st.session_state.data is not None:
                                     key="nb_builder_download"
                                 )
                             st.success("✅ Notebook ready! Click the button above to download.")
+
+                            # ── STAR RATING SECTION ──
+                            st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+                            if st.session_state.rating_submitted:
+                                # ── THANK YOU STATE ──
+                                stars_display = "⭐" * st.session_state.rating_stars + "☆" * (5 - st.session_state.rating_stars)
+                                st.markdown(f"""
+                                <div class="rating-submitted">
+                                  <div style="font-size:2.5rem;margin-bottom:.5rem">{stars_display}</div>
+                                  <div style="font-size:1.1rem;font-weight:800;color:{ACCENT1};margin-bottom:.25rem">
+                                    {"🎉 Amazing! Thank you so much!" if st.session_state.rating_stars == 5
+                                     else "😊 Thanks for your feedback!" if st.session_state.rating_stars >= 3
+                                     else "🙏 Thanks — we'll keep improving!"}
+                                  </div>
+                                  <div style="font-size:.82rem;color:{TEXT3}">Your rating: {st.session_state.rating_stars}/5 stars</div>
+                                  {"" if not st.session_state.rating_feedback else f'<div style="font-size:.8rem;color:{TEXT2};margin-top:.5rem;font-style:italic;">"{st.session_state.rating_feedback}"</div>'}
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                                if st.button("✏️ Update Rating", key="rating_reset"):
+                                    st.session_state.rating_submitted = False
+                                    st.rerun()
+
+                            else:
+                                # ── RATING INPUT STATE ──
+                                st.markdown(f"""
+                                <div class="rating-card slide-up">
+                                  <div style="text-align:center;margin-bottom:.5rem">
+                                    <div style="font-size:1rem;font-weight:800;color:{TEXT1};letter-spacing:.02em">
+                                      ⭐ Rate Your Experience
+                                    </div>
+                                    <div style="font-size:.78rem;color:{TEXT3};margin-top:.3rem">
+                                      How was your DataForge ML Studio experience?
+                                    </div>
+                                  </div>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                                # Star buttons row
+                                star_labels = {1:"😞 Poor", 2:"😕 Fair", 3:"😊 Good", 4:"😄 Great", 5:"🤩 Excellent!"}
+                                r1, r2, r3, r4, r5 = st.columns(5)
+                                for col, val in zip([r1,r2,r3,r4,r5], [1,2,3,4,5]):
+                                    with col:
+                                        is_active = st.session_state.rating_stars >= val
+                                        star_icon = "⭐" if is_active else "☆"
+                                        if st.button(
+                                            star_icon,
+                                            key=f"star_{val}",
+                                            help=star_labels[val],
+                                            use_container_width=True
+                                        ):
+                                            st.session_state.rating_stars = val
+                                            st.rerun()
+
+                                # Show selected rating label
+                                if st.session_state.rating_stars > 0:
+                                    st.markdown(f"""
+                                    <div style="text-align:center;margin:.4rem 0 .75rem;font-size:.9rem;font-weight:700;color:{ACCENT1}">
+                                      {star_labels[st.session_state.rating_stars]}
+                                    </div>
+                                    """, unsafe_allow_html=True)
+
+                                    # Optional feedback
+                                    feedback = st.text_area(
+                                        "💬 Share your thoughts (optional)",
+                                        placeholder="What did you like? What can we improve?",
+                                        value=st.session_state.rating_feedback,
+                                        max_chars=300,
+                                        key="rating_feedback_input",
+                                        label_visibility="collapsed",
+                                        height=90,
+                                    )
+
+                                    sub1, sub2 = st.columns([2, 3])
+                                    with sub1:
+                                        if st.button("🚀 Submit Rating", key="rating_submit", use_container_width=True):
+                                            st.session_state.rating_feedback = feedback
+                                            st.session_state.rating_submitted = True
+                                            st.rerun()
+                                    with sub2:
+                                        st.markdown(f'<div style="font-size:.72rem;color:{TEXT3};padding:.6rem 0">Your feedback helps us improve DataForge! 🙌</div>', unsafe_allow_html=True)
+                                else:
+                                    st.markdown(f'<div style="text-align:center;font-size:.82rem;color:{TEXT3};padding:.5rem 0">👆 Click a star to rate</div>', unsafe_allow_html=True)
 
                         except Exception as nb_err:
                             st.error(f"❌ Notebook generation failed: {nb_err}")
