@@ -14,15 +14,12 @@ from pycaret.regression import (
     setup as reg_setup, compare_models as reg_compare,
     pull as reg_pull, save_model as reg_save,
 )
-import warnings, time, io, os, gc
+import warnings, time, io, os, gc, json, base64, requests, zipfile, tempfile
 from datetime import datetime
 warnings.filterwarnings("ignore")
 
 st.set_page_config(page_title="DataForge ML Studio", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
 
-# ─────────────────────────────────────────────
-#  MEMORY-SAFE TRAINING CONFIG
-# ─────────────────────────────────────────────
 MAX_ROWS_TRAINING   = 5_000
 MAX_ROWS_WARNING    = 2_000
 SAMPLE_RANDOM_STATE = 42
@@ -31,7 +28,270 @@ ALL_CLF_MODELS = ["lr","dt","rf","et","ridge","knn","nb","ada","xgboost","lightg
 ALL_REG_MODELS = ["lr","dt","rf","et","ridge","lasso","knn","ada","en","xgboost","lightgbm","catboost","gbr","br"]
 
 # ─────────────────────────────────────────────
-#  NOTEBOOK GENERATOR
+#  STYLED MARKDOWN GENERATOR
+# ─────────────────────────────────────────────
+def make_styled_markdown_cells(
+    df, target_col, problem_type, dataset_name,
+    best_model_name, top_score, metric_name,
+    author_name="", author_title="", author_quote="",
+    author_email="", author_linkedin="", author_github="",
+    author_kaggle="", author_facebook=""
+):
+    """Dataset ke hisaab se dynamic styled HTML markdown cells banata hai."""
+
+    num_cols = df.select_dtypes(include=["number"]).columns.tolist()
+    cat_cols = df.select_dtypes(include=["object","category"]).columns.tolist()
+    null_pct = round(df.isnull().sum().sum() / df.size * 100, 2)
+    dup_cnt  = int(df.duplicated().sum())
+    rows, cols = len(df), len(df.columns)
+    task_label = "Classification" if problem_type == "classification" else "Regression"
+    task_emoji = "🎯" if problem_type == "classification" else "📈"
+
+    # ── 1. GRADIENT TITLE HEADER ──
+    title_cell = f"""<p style="background: linear-gradient(90deg, #667eea, #764ba2, #f093fb);
+         font-family: 'Montserrat', sans-serif;
+         font-size: 26px;
+         text-align: center;
+         color: #ffffff;
+         padding: 24px 42px;
+         border-radius: 30px;
+         border: 3px solid #a78bfa;
+         box-shadow: 0 10px 25px rgba(102,126,234,0.3);
+         letter-spacing: 1.2px;
+         word-spacing: 4px;
+         font-weight: 700;
+         text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+         margin: 10px 0 20px;">
+  ⚡ DataForge ML Studio — AutoML Notebook<br>
+  <span style="font-size:16px;font-weight:400;opacity:0.9;">Dataset: {dataset_name} &nbsp;|&nbsp; Target: {target_col} &nbsp;|&nbsp; Task: {task_label}</span>
+</p>
+
+<div style="display:flex; gap:12px; flex-wrap:wrap; font-family:'Montserrat',sans-serif; margin: 0 2px 18px; justify-content: center;">
+  <span style="background:#fff0f5; border:1px solid #ffc9e0; color:#8b1a5e; padding:8px 16px; border-radius:999px; font-size:13px; box-shadow:0 3px 10px rgba(0,0,0,0.06); font-weight:600;">
+    {task_emoji} <b>Task:</b> {task_label}
+  </span>
+  <span style="background:#f0f8ff; border:1px solid #b8d8ff; color:#1a4d8b; padding:8px 16px; border-radius:999px; font-size:13px; box-shadow:0 3px 10px rgba(0,0,0,0.06); font-weight:600;">
+    📊 <b>Dataset:</b> {dataset_name}
+  </span>
+  <span style="background:#fff9f0; border:1px solid #ffd9a8; color:#8b5a00; padding:8px 16px; border-radius:999px; font-size:13px; box-shadow:0 3px 10px rgba(0,0,0,0.06); font-weight:600;">
+    🎯 <b>Target:</b> {target_col}
+  </span>
+  <span style="background:#f0fff4; border:1px solid #9ae6b4; color:#22543d; padding:8px 16px; border-radius:999px; font-size:13px; box-shadow:0 3px 10px rgba(0,0,0,0.06); font-weight:600;">
+    🏆 <b>Best Model:</b> {best_model_name}
+  </span>
+  <span style="background:#f5f5f5; border:1px solid #d4d4d4; color:#404040; padding:8px 16px; border-radius:999px; font-size:13px; box-shadow:0 3px 10px rgba(0,0,0,0.06); font-weight:600;">
+    📅 <b>Generated:</b> {datetime.now().strftime('%Y-%m-%d')}
+  </span>
+</div>"""
+
+    # ── 2. DATASET OVERVIEW CARD ──
+    overview_cell = f"""<div style="font-family:'Montserrat',sans-serif;
+            background:linear-gradient(135deg, #e0f7ff 0%, #f0f9ff 100%);
+            padding:20px 22px;
+            border-radius:16px;
+            border-left: 6px solid #667eea;
+            box-shadow: 0 5px 18px rgba(102,126,234,0.15);
+            color:#2c2c2c;
+            margin: 0 0 20px;">
+  🗂️ <b style="font-size:17px;">Dataset Overview:</b>
+  <ul style="margin:12px 0 0 20px; line-height:2; font-size:15px;">
+    <li>📋 <b>Total Rows:</b> {rows:,} &nbsp;|&nbsp; <b>Columns:</b> {cols}</li>
+    <li>🔢 <b>Numerical Features:</b> {len(num_cols)} &nbsp;|&nbsp; 🔤 <b>Categorical Features:</b> {len(cat_cols)}</li>
+    <li>❓ <b>Missing Values:</b> {null_pct}% &nbsp;|&nbsp; 🗑️ <b>Duplicate Rows:</b> {dup_cnt}</li>
+    <li>🎯 <b>Target Column:</b> <code>{target_col}</code> &nbsp;|&nbsp; <b>Problem Type:</b> {task_label}</li>
+    <li>🏆 <b>Best Model:</b> {best_model_name} &nbsp;|&nbsp; <b>{metric_name}:</b> {top_score:.4f}</li>
+  </ul>
+</div>"""
+
+    # ── 3. KEY FINDINGS CARD ──
+    findings_cell = f"""<div style="font-family:'Montserrat',sans-serif;
+            background:linear-gradient(135deg, #e3f2fd 0%, #f7fbff 100%);
+            padding:20px 22px;
+            border-radius:16px;
+            border:2px solid #90caf9;
+            box-shadow:0 6px 20px rgba(33,150,243,0.12);
+            color:#2a2a2a;
+            margin-bottom:20px;">
+  <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+    <span style="font-size:22px;">🔥</span>
+    <h3 style="margin:0; font-size:18px; color:#1565c0; font-weight:700;">Key Findings</h3>
+  </div>
+  <ul style="margin:10px 0 0 20px; padding:0; line-height:1.9; font-size:15px;">
+    <li>📊 <b>Dataset Shape:</b> {rows:,} rows × {cols} columns — {'large' if rows > 1000 else 'compact'} dataset</li>
+    <li>🔢 <b>Feature Mix:</b> {len(num_cols)} numerical + {len(cat_cols)} categorical features</li>
+    <li>{'✅' if null_pct == 0 else '⚠️'} <b>Data Quality:</b> {'Clean — no missing values' if null_pct == 0 else f'{null_pct}% missing values detected'}</li>
+    <li>🏆 <b>Best Algorithm:</b> {best_model_name} outperformed all other models</li>
+    <li>📈 <b>Performance Score ({metric_name}):</b> {top_score:.4f}</li>
+    <li>🎯 <b>AutoML:</b> Multiple algorithms compared via cross-validation automatically</li>
+  </ul>
+</div>"""
+
+    # ── 4. WHAT YOU'LL LEARN CARD ──
+    learn_cell = f"""<div style="font-family:'Montserrat',sans-serif;
+            background:linear-gradient(135deg, #f3f7ff 0%, #f9fbff 100%);
+            padding:20px 22px;
+            border-radius:16px;
+            border:2px solid #c7d7ff;
+            box-shadow:0 6px 20px rgba(63,81,181,0.12);
+            color:#2a2a2a;
+            margin-bottom:20px;">
+  <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+    <span style="font-size:22px;">📚</span>
+    <h3 style="margin:0; font-size:18px; color:#283593; font-weight:700;">What You'll Learn</h3>
+  </div>
+  <ul style="margin:10px 0 0 20px; padding:0; line-height:1.9; font-size:15px;">
+    <li>🔍 <b>EDA Techniques:</b> How to explore and visualize a {'classification' if problem_type == 'classification' else 'regression'} dataset</li>
+    <li>🧹 <b>Data Preprocessing:</b> Handling missing values, duplicates, and normalization</li>
+    <li>🤖 <b>AutoML with PyCaret:</b> Compare {len(ALL_CLF_MODELS if problem_type == 'classification' else ALL_REG_MODELS)}+ algorithms in one line of code</li>
+    <li>🏆 <b>Model Selection:</b> How cross-validation helps pick the best model ({best_model_name})</li>
+    <li>📊 <b>Result Visualization:</b> Bar charts, radar plots, and feature importance</li>
+    <li>💾 <b>Model Export:</b> Save and reload trained models for production use</li>
+  </ul>
+</div>"""
+
+    # ── 5. PIPELINE STEPS CARD ──
+    pipeline_cell = f"""<div style="font-family:'Montserrat',sans-serif;
+            background:#ffffff;
+            padding:20px 22px;
+            border-radius:16px;
+            border:2px solid #e8e8e8;
+            box-shadow:0 8px 24px rgba(0,0,0,0.08);
+            color:#2a2a2a;
+            margin-bottom:20px;">
+  <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+    <span style="font-size:22px;">📋</span>
+    <h3 style="margin:0; font-size:18px; color:#2c2c2c; font-weight:700;">AutoML Pipeline — Step by Step</h3>
+  </div>
+  <ul style="margin:10px 0 0 20px; padding:0; line-height:2; font-size:15px;">
+    <li>📦 <b>Step 1 — Data Loading:</b> Import <code>{dataset_name}</code> and inspect shape & types</li>
+    <li>🔍 <b>Step 2 — EDA:</b> Visualize distributions, correlations, and target variable</li>
+    <li>🧹 <b>Step 3 — Preprocessing:</b> Handle nulls, remove duplicates, normalize features</li>
+    <li>⚙️ <b>Step 4 — PyCaret Setup:</b> Configure {task_label} environment with CV</li>
+    <li>🤖 <b>Step 5 — Model Comparison:</b> Benchmark all algorithms automatically</li>
+    <li>🏆 <b>Step 6 — Best Model:</b> {best_model_name} selected with {metric_name} = {top_score:.4f}</li>
+    <li>💾 <b>Step 7 — Export:</b> Save model as .pkl for deployment</li>
+  </ul>
+</div>"""
+
+    # ── 6. TECH STACK CARD ──
+    tech_cell = f"""<div style="font-family:'Montserrat',sans-serif;
+            background:linear-gradient(135deg, #e8f5e9 0%, #f1f8e9 100%);
+            padding:20px 22px;
+            border-radius:16px;
+            border:2px solid #81c784;
+            box-shadow:0 6px 20px rgba(76,175,80,0.12);
+            color:#2a2a2a;
+            margin-bottom:20px;">
+  <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+    <span style="font-size:22px;">🛠️</span>
+    <h3 style="margin:0; font-size:18px; color:#2e7d32; font-weight:700;">Tech Stack Used</h3>
+  </div>
+  <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:12px;">
+    <span style="background:#fff; border:2px solid #607d8b; color:#455a64; padding:6px 14px; border-radius:20px; font-size:13px; font-weight:600;">🐍 Python</span>
+    <span style="background:#fff; border:2px solid #3f51b5; color:#283593; padding:6px 14px; border-radius:20px; font-size:13px; font-weight:600;">🤖 PyCaret</span>
+    <span style="background:#fff; border:2px solid #ff9800; color:#e65100; padding:6px 14px; border-radius:20px; font-size:13px; font-weight:600;">🐼 Pandas</span>
+    <span style="background:#fff; border:2px solid #4caf50; color:#2e7d32; padding:6px 14px; border-radius:20px; font-size:13px; font-weight:600;">🔢 NumPy</span>
+    <span style="background:#fff; border:2px solid #9c27b0; color:#6a1b9a; padding:6px 14px; border-radius:20px; font-size:13px; font-weight:600;">📊 Plotly</span>
+    <span style="background:#fff; border:2px solid #f44336; color:#c62828; padding:6px 14px; border-radius:20px; font-size:13px; font-weight:600;">⚡ XGBoost</span>
+    <span style="background:#fff; border:2px solid #00bcd4; color:#006064; padding:6px 14px; border-radius:20px; font-size:13px; font-weight:600;">💡 LightGBM</span>
+    <span style="background:#fff; border:2px solid #ff5722; color:#bf360c; padding:6px 14px; border-radius:20px; font-size:13px; font-weight:600;">🐱 CatBoost</span>
+  </div>
+</div>"""
+
+    # ── 7. SECTION BANNER GENERATOR ──
+    def section_banner(title, color1="#667eea", color2="#764ba2"):
+        return f"""<p style="background: linear-gradient(90deg, {color1}, {color2});
+         font-family: 'Montserrat', sans-serif;
+         font-size: 22px;
+         text-align: center;
+         color: #ffffff;
+         padding: 18px 42px;
+         border-radius: 30px;
+         border: 3px solid {color1}99;
+         box-shadow: 0 8px 20px {color1}44;
+         letter-spacing: 1.1px;
+         font-weight: 700;
+         text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+         margin: 30px 0 18px;">
+  {title}
+</p>"""
+
+    # ── 8. ABOUT THE AUTHOR ──
+    connect_links = ""
+    if author_email:
+        connect_links += f'<li><a href="mailto:{author_email}" style="background:linear-gradient(135deg,#fff3f3,#ffe8e8);padding:11px 18px;border-radius:12px;text-decoration:none;color:#d32f2f;font-weight:600;font-size:14px;border:2px solid #ffcdd2;display:inline-block;box-shadow:0 3px 8px rgba(211,47,47,0.1);">📧 Email</a></li>'
+    if author_linkedin:
+        connect_links += f'<li><a href="{author_linkedin}" style="background:linear-gradient(135deg,#e3f2fd,#e8eaf6);padding:11px 18px;border-radius:12px;text-decoration:none;color:#1565c0;font-weight:600;font-size:14px;border:2px solid #bbdefb;display:inline-block;box-shadow:0 3px 8px rgba(21,101,192,0.1);">🔗 LinkedIn</a></li>'
+    if author_github:
+        connect_links += f'<li><a href="{author_github}" style="background:linear-gradient(135deg,#f5f5f5,#eeeeee);padding:11px 18px;border-radius:12px;text-decoration:none;color:#212121;font-weight:600;font-size:14px;border:2px solid #e0e0e0;display:inline-block;box-shadow:0 3px 8px rgba(33,33,33,0.1);">💻 GitHub</a></li>'
+    if author_kaggle:
+        connect_links += f'<li><a href="{author_kaggle}" style="background:linear-gradient(135deg,#e0f7fa,#e1f5fe);padding:11px 18px;border-radius:12px;text-decoration:none;color:#00838f;font-weight:600;font-size:14px;border:2px solid #b2ebf2;display:inline-block;box-shadow:0 3px 8px rgba(0,131,143,0.1);">🧠 Kaggle</a></li>'
+    if author_facebook:
+        connect_links += f'<li><a href="{author_facebook}" style="background:linear-gradient(135deg,#e7f0ff,#dde7ff);padding:11px 18px;border-radius:12px;text-decoration:none;color:#0d47a1;font-weight:600;font-size:14px;border:2px solid #c5cae9;display:inline-block;box-shadow:0 3px 8px rgba(13,71,161,0.12);">📘 Facebook</a></li>'
+
+    quote_html = ""
+    if author_quote:
+        quote_html = f"""<blockquote style="background:linear-gradient(135deg,#e8f5e9,#f1f8e9);border-left:5px solid #4caf50;padding:16px 20px;font-style:italic;border-radius:12px;color:#2c2c2c;margin:16px 0 0;font-size:15px;line-height:1.7;box-shadow:0 3px 10px rgba(76,175,80,0.1);">
+    💡 "{author_quote}"
+  </blockquote>"""
+
+    author_cell = ""
+    if author_name:
+        author_cell = f"""{section_banner("🧑‍💻 About the Developer", "#667eea", "#764ba2")}
+
+<div style="font-family:'Montserrat',sans-serif;background:linear-gradient(135deg,#ffffff,#f8f9fa);border-radius:18px;padding:28px;border:2px solid #e0e7ff;box-shadow:0 8px 24px rgba(102,126,234,0.12);color:#2c2c2c;margin-bottom:25px;">
+  <p style="font-size:16px;line-height:1.8;margin:0 0 14px;">
+    Hi, I'm <strong style="color:#667eea;font-size:17px;">{author_name}</strong>
+    {f'— <strong>{author_title}</strong>' if author_title else ''}.
+  </p>
+  <p style="font-size:16px;line-height:1.8;margin:0 0 16px;">
+    This notebook was generated using <strong>DataForge ML Studio</strong> — an AutoML platform that makes machine learning accessible to everyone.
+  </p>
+  {quote_html}
+</div>"""
+
+        if connect_links:
+            author_cell += f"""{section_banner("🌐 Connect With Me", "#667eea", "#f093fb")}
+
+<div style="font-family:'Montserrat',sans-serif;background:linear-gradient(135deg,#ffffff,#fafcff);border-radius:18px;padding:28px;border:2px solid #e0e7ff;box-shadow:0 8px 24px rgba(102,126,234,0.1);color:#2c2c2c;">
+  <ul style="list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:12px;justify-content:center;">
+    {connect_links}
+  </ul>
+</div>
+
+<hr style="margin:30px 0;border:none;height:1px;background:#e0e0e0;">
+
+<p style="text-align:center;font-family:'Montserrat',sans-serif;color:#666;font-size:13px;margin-top:30px;font-style:italic;">
+  ⭐ If you find this notebook valuable, please upvote and share feedback — your support motivates me to keep building and learning!
+</p>"""
+
+    # ── SECTION BANNERS for notebook ──
+    banners = {
+        "imports":      section_banner("📦 Section 1 — Install & Import Libraries", "#667eea", "#764ba2"),
+        "load":         section_banner("📂 Section 2 — Load Dataset", "#f093fb", "#f5576c"),
+        "overview":     section_banner("🔍 Section 3 — Dataset Overview", "#4facfe", "#00f2fe"),
+        "eda":          section_banner("🧬 Section 4 — Exploratory Data Analysis", "#43e97b", "#38f9d7"),
+        "preprocess":   section_banner("🧹 Section 5 — Data Preprocessing", "#fa709a", "#fee140"),
+        "training":     section_banner("⚙️ Section 6 — AutoML Training with PyCaret", "#a18cd1", "#fbc2eb"),
+        "results":      section_banner("🏆 Section 7 — Results & Visualizations", "#ffecd2", "#fcb69f"),
+        "export":       section_banner("💾 Section 8 — Save & Export Model", "#667eea", "#43e97b"),
+        "summary":      section_banner("📋 Section 9 — Session Summary", "#764ba2", "#667eea"),
+    }
+
+    return {
+        "title":    title_cell,
+        "overview": overview_cell,
+        "findings": findings_cell,
+        "learn":    learn_cell,
+        "pipeline": pipeline_cell,
+        "tech":     tech_cell,
+        "banners":  banners,
+        "author":   author_cell,
+    }
+
+
+# ─────────────────────────────────────────────
+#  NOTEBOOK GENERATOR (UPDATED)
 # ─────────────────────────────────────────────
 import json as _json
 
@@ -39,14 +299,11 @@ def generate_notebook(df, target_col, problem_type, results_df, best_model_name,
                       top_score, metric_name, dataset_name, training_time, fold,
                       normalize, train_size,
                       eda_selections=None, pre_selections=None,
-                      train_selections=None, export_selections=None):
-    """
-    User ke selections ke mutabiq notebook banata hai.
-    eda_selections, pre_selections, train_selections, export_selections
-    — dicts hain jisme True/False values hain.
-    Agar None hain toh sab kuch include hoga (default behaviour).
-    """
-    # ── Default: agar koi selection nahi di toh sab ON ──
+                      train_selections=None, export_selections=None,
+                      author_name="", author_title="", author_quote="",
+                      author_email="", author_linkedin="", author_github="",
+                      author_kaggle="", author_facebook=""):
+
     eda  = eda_selections   or {"distributions":True,"correlation":True,"missing":True,"target_dist":True,"boxplots":True,"scatter_matrix":True,"cat_bars":True,"outlier_plot":True}
     pre  = pre_selections   or {"drop_dups":True,"handle_missing":True,"normalize":True,"remove_outliers":False}
     trn  = train_selections or {"model_table":True,"bar_chart":True,"radar_chart":True,"feature_importance":True}
@@ -56,6 +313,18 @@ def generate_notebook(df, target_col, problem_type, results_df, best_model_name,
     cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
     null_pct = round(df.isnull().sum().sum() / df.size * 100, 2)
     dup_cnt  = int(df.duplicated().sum())
+
+    # Get styled markdown
+    styled = make_styled_markdown_cells(
+        df=df, target_col=target_col, problem_type=problem_type,
+        dataset_name=dataset_name, best_model_name=best_model_name,
+        top_score=top_score, metric_name=metric_name,
+        author_name=author_name, author_title=author_title, author_quote=author_quote,
+        author_email=author_email, author_linkedin=author_linkedin,
+        author_github=author_github, author_kaggle=author_kaggle,
+        author_facebook=author_facebook
+    )
+    banners = styled["banners"]
 
     def code_cell(source, cell_id=""):
         return {"cell_type":"code","execution_count":None,
@@ -79,16 +348,16 @@ def generate_notebook(df, target_col, problem_type, results_df, best_model_name,
 
     cells = []
 
-    # ── Section 1: Title ──
-    cells.append(md_cell(f"""# ⚡ DataForge ML Studio — Auto-Generated Notebook
+    # ── TITLE + META CELLS ──
+    cells.append(md_cell(styled["title"], "title"))
+    cells.append(md_cell(styled["overview"], "overview"))
+    cells.append(md_cell(styled["findings"], "findings"))
+    cells.append(md_cell(styled["learn"], "learn"))
+    cells.append(md_cell(styled["pipeline"], "pipeline"))
+    cells.append(md_cell(styled["tech"], "tech"))
 
-> **Dataset:** `{dataset_name}` | **Target:** `{target_col}` | **Problem:** {problem_type.title()}
-> **Best Model:** {best_model_name} | **Score ({metric_name}):** `{top_score:.4f}` | **CV Folds:** `{fold}`
-
-Complete reproducible pipeline — run locally or on Google Colab.""", "title"))
-
-    # ── Section 2: Imports ──
-    cells.append(md_cell("## 📦 Section 1 — Install & Import", "s1"))
+    # ── IMPORTS ──
+    cells.append(md_cell(banners["imports"], "s1"))
     cells.append(code_cell(f"""# !pip install pycaret plotly pandas numpy openpyxl
 import pandas as pd, numpy as np, warnings
 warnings.filterwarnings('ignore')
@@ -99,45 +368,45 @@ from {pm} import (
     setup as {sp}_setup, compare_models as {sp}_compare,
     pull as {sp}_pull, save_model as {sp}_save, load_model as {sp}_load,
 )
-print("✅ Libraries imported!")""", "s1_imp"))
+print("✅ Libraries imported successfully!")""", "s1_imp"))
 
-    # ── Section 3: Load data ──
-    cells.append(md_cell("## 📂 Section 2 — Load Dataset", "s2"))
+    # ── LOAD DATA ──
+    cells.append(md_cell(banners["load"], "s2"))
     cells.append(code_cell(f"""# df = pd.read_csv("your_file.csv")
 # df = pd.read_excel("your_file.xlsx")
 TARGET = "{target_col}"
-print(f"Shape: {{df.shape}}, Target: {{TARGET}}")
+print(f"✅ Dataset loaded | Shape: {{df.shape}} | Target: {{TARGET}}")
 df.head()""", "s2_load"))
 
-    # ── Section 4: Dataset overview ──
-    cells.append(md_cell("## 🔍 Section 3 — Dataset Overview", "s3"))
-    cells.append(code_cell(f"""print(f"Rows: {len(df):,} | Cols: {len(df.columns)} | Missing: {null_pct}% | Dups: {dup_cnt}")
+    # ── OVERVIEW ──
+    cells.append(md_cell(banners["overview"], "s3"))
+    cells.append(code_cell(f"""print(f"📊 Rows: {len(df):,} | Cols: {len(df.columns)} | Missing: {null_pct}% | Duplicates: {dup_cnt}")
 df.info()""", "s3_info"))
     cells.append(code_cell("df.describe(include='all').round(3)", "s3_desc"))
 
-    # ── Section 5: EDA — user selected charts only ──
+    # ── EDA ──
     eda_cells_added = False
 
     if eda.get("missing"):
         if not eda_cells_added:
-            cells.append(md_cell("## 🧬 Section 4 — EDA (Exploratory Data Analysis)", "s4"))
+            cells.append(md_cell(banners["eda"], "s4"))
             eda_cells_added = True
         cells.append(code_cell("""# Missing values chart
 missing = df.isnull().sum()
 missing = missing[missing > 0].sort_values(ascending=False)
 if len(missing) > 0:
-    fig = px.bar(x=missing.index, y=missing.values, title="Missing Values per Column",
+    fig = px.bar(x=missing.index, y=missing.values, title="❓ Missing Values per Column",
                  color=missing.values, color_continuous_scale=["#4ade80","#fbbf24","#f87171"])
     fig.update_layout(template="plotly_dark", height=350)
     fig.show()
 else:
-    print("✅ No missing values found!")""", "s4_miss"))
+    print("✅ No missing values found — clean dataset!")""", "s4_miss"))
 
     if eda.get("distributions") and num_cols:
         if not eda_cells_added:
-            cells.append(md_cell("## 🧬 Section 4 — EDA (Exploratory Data Analysis)", "s4"))
+            cells.append(md_cell(banners["eda"], "s4"))
             eda_cells_added = True
-        cells.append(code_cell(f"""# Numeric distributions
+        cells.append(code_cell(f"""# 📊 Numeric feature distributions
 num_cols = {ncr}
 cols_to_plot = num_cols[:9]
 n_c = min(3, len(cols_to_plot))
@@ -146,14 +415,14 @@ fig = make_subplots(rows=n_r, cols=n_c, subplot_titles=cols_to_plot)
 for i, col in enumerate(cols_to_plot):
     fig.add_trace(go.Histogram(x=df[col], name=col, marker_color="#4ade80", opacity=0.8),
                   row=i//n_c+1, col=i%n_c+1)
-fig.update_layout(template="plotly_dark", height=280*n_r, title_text="Distributions", showlegend=False)
+fig.update_layout(template="plotly_dark", height=280*n_r, title_text="📊 Feature Distributions", showlegend=False)
 fig.show()""", "s4_hist"))
 
     if eda.get("boxplots") and num_cols:
         if not eda_cells_added:
-            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            cells.append(md_cell(banners["eda"], "s4"))
             eda_cells_added = True
-        cells.append(code_cell(f"""# Box plots
+        cells.append(code_cell(f"""# 📦 Box plots for outlier detection
 num_cols = {ncr}
 cols_bp = num_cols[:6]
 n_c = min(3, len(cols_bp))
@@ -161,69 +430,68 @@ n_r = (len(cols_bp) + n_c - 1) // n_c
 fig = make_subplots(rows=n_r, cols=n_c, subplot_titles=cols_bp)
 for i, col in enumerate(cols_bp):
     fig.add_trace(go.Box(y=df[col], name=col, marker_color="#60a5fa"), row=i//n_c+1, col=i%n_c+1)
-fig.update_layout(template="plotly_dark", height=280*n_r, title_text="Box Plots", showlegend=False)
+fig.update_layout(template="plotly_dark", height=280*n_r, title_text="📦 Box Plots", showlegend=False)
 fig.show()""", "s4_box"))
 
     if eda.get("correlation") and len(num_cols) >= 2:
         if not eda_cells_added:
-            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            cells.append(md_cell(banners["eda"], "s4"))
             eda_cells_added = True
-        cells.append(code_cell(f"""# Correlation heatmap
+        cells.append(code_cell(f"""# 🔥 Correlation heatmap
 corr = df[{ncr}[:15]].corr().round(2)
 fig = go.Figure(go.Heatmap(z=corr.values, x=corr.columns, y=corr.index,
     colorscale=[[0,"#f87171"],[0.5,"#1c1c1c"],[1,"#4ade80"]], zmid=0,
     text=corr.values.round(2), texttemplate="%{{text}}", textfont=dict(size=9)))
-fig.update_layout(template="plotly_dark", height=520, title="Correlation Heatmap")
+fig.update_layout(template="plotly_dark", height=520, title="🔥 Correlation Heatmap")
 fig.show()""", "s4_corr"))
 
     if eda.get("scatter_matrix") and len(num_cols) >= 2:
         if not eda_cells_added:
-            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            cells.append(md_cell(banners["eda"], "s4"))
             eda_cells_added = True
-        cells.append(code_cell(f"""# Scatter matrix
-import plotly.figure_factory as ff
+        cells.append(code_cell(f"""# 🔵 Scatter matrix
 scatter_cols = {ncr}[:5]
-fig = px.scatter_matrix(df[scatter_cols], title="Scatter Matrix",
+fig = px.scatter_matrix(df[scatter_cols], title="🔵 Scatter Matrix",
                         color_discrete_sequence=["#4ade80"])
 fig.update_layout(template="plotly_dark", height=600)
 fig.show()""", "s4_scat"))
 
     if eda.get("target_dist"):
         if not eda_cells_added:
-            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            cells.append(md_cell(banners["eda"], "s4"))
             eda_cells_added = True
-        cells.append(code_cell(f"""# Target column distribution
+        cells.append(code_cell(f"""# 🎯 Target column distribution
 target_series = df["{target_col}"]
 if "{problem_type}" == "classification":
     vc = target_series.value_counts()
     fig = px.pie(values=vc.values, names=vc.index.astype(str),
-                 title="Target Distribution — {target_col}",
+                 title="🎯 Target Distribution — {target_col}",
                  color_discrete_sequence=["#4ade80","#60a5fa","#c084fc","#fbbf24","#f87171"])
 else:
     fig = px.histogram(df, x="{target_col}", nbins=40,
-                       title="Target Distribution — {target_col}",
+                       title="🎯 Target Distribution — {target_col}",
                        color_discrete_sequence=["#4ade80"])
 fig.update_layout(template="plotly_dark", height=380)
 fig.show()""", "s4_tgt"))
 
     if eda.get("cat_bars") and cat_cols:
         if not eda_cells_added:
-            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            cells.append(md_cell(banners["eda"], "s4"))
             eda_cells_added = True
-        cells.append(code_cell(f"""# Categorical column bar charts
+        cells.append(code_cell(f"""# 📋 Categorical column value counts
 cat_cols = {ccr}
 for col in cat_cols[:4]:
     vc = df[col].value_counts().head(12)
-    fig = px.bar(x=vc.index.astype(str), y=vc.values, title=f"Value Counts — {{col}}",
+    fig = px.bar(x=vc.index.astype(str), y=vc.values, title=f"📋 Value Counts — {{col}}",
                  color=vc.values, color_continuous_scale=["#60a5fa","#4ade80"])
     fig.update_layout(template="plotly_dark", height=320, showlegend=False, coloraxis_showscale=False)
     fig.show()""", "s4_cat"))
 
     if eda.get("outlier_plot") and num_cols:
         if not eda_cells_added:
-            cells.append(md_cell("## 🧬 Section 4 — EDA", "s4"))
+            cells.append(md_cell(banners["eda"], "s4"))
             eda_cells_added = True
-        cells.append(code_cell(f"""# Outlier detection (IQR method)
+        cells.append(code_cell(f"""# ⚠️ Outlier detection using IQR method
 num_cols = {ncr}
 outlier_info = []
 for col in num_cols:
@@ -232,77 +500,72 @@ for col in num_cols:
     n_out = ((df[col] < Q1 - 1.5*IQR) | (df[col] > Q3 + 1.5*IQR)).sum()
     outlier_info.append({{"column": col, "outliers": int(n_out), "pct": round(n_out/len(df)*100, 2)}})
 out_df = pd.DataFrame(outlier_info).sort_values("outliers", ascending=False)
-fig = px.bar(out_df, x="column", y="pct", title="Outlier % per Column (IQR method)",
+fig = px.bar(out_df, x="column", y="pct", title="⚠️ Outlier % per Column (IQR method)",
              color="pct", color_continuous_scale=["#4ade80","#fbbf24","#f87171"])
 fig.update_layout(template="plotly_dark", height=380)
 fig.show()
 print(out_df.to_string(index=False))""", "s4_out"))
 
-    # ── Section 6: Preprocessing — user selected steps only ──
+    # ── PREPROCESSING ──
     pre_steps = []
     if pre.get("drop_dups"):
-        pre_steps.append("""# Drop duplicate rows
+        pre_steps.append("""# 🗑️ Drop duplicate rows
 before = len(df)
 df = df.drop_duplicates().reset_index(drop=True)
-print(f"Duplicates removed: {before - len(df)} | Shape: {df.shape}")""")
+print(f"✅ Duplicates removed: {before - len(df)} | New shape: {df.shape}")""")
 
     if pre.get("handle_missing"):
-        pre_steps.append("""# Handle missing values — show summary
+        pre_steps.append("""# 🩹 Missing value summary (PyCaret handles imputation automatically)
 nc = df.isnull().sum()
 nc = nc[nc > 0]
-print("Missing cols before:", nc.to_string() if len(nc) else "None ✅")
-# PyCaret handles imputation automatically in setup()""")
+print("Missing columns:", nc.to_string() if len(nc) else "None ✅")
+print("ℹ️ PyCaret will auto-impute during setup()")""")
 
     if pre.get("normalize"):
-        pre_steps.append(f"""# Normalization — handled by PyCaret setup (normalize={normalize})
-# Will be applied via {sp}_setup(normalize=True)
-print("✅ Normalization: will be applied in PyCaret setup")""")
+        pre_steps.append(f"""# ⚖️ Normalization — handled by PyCaret setup(normalize=True)
+print("✅ Normalization will be applied in PyCaret setup")""")
 
     if pre.get("remove_outliers") and problem_type == "regression":
-        pre_steps.append("""# Remove outliers (regression only — IQR method)
+        pre_steps.append("""# 🚫 Remove outliers using Z-score (regression only)
 from scipy import stats
 num_cols_pre = df.select_dtypes(include='number').columns.drop('target', errors='ignore')
 z_scores = stats.zscore(df[num_cols_pre].fillna(df[num_cols_pre].median()))
 df = df[(abs(z_scores) < 3).all(axis=1)].reset_index(drop=True)
-print(f"After outlier removal: {df.shape}")""")
+print(f"✅ After outlier removal: {df.shape}")""")
 
     if pre_steps:
-        cells.append(md_cell("## 🧹 Section 5 — Preprocessing", "s5"))
+        cells.append(md_cell(banners["preprocess"], "s5"))
         for i, step_code in enumerate(pre_steps):
             cells.append(code_cell(step_code, f"s5_pre{i}"))
 
-    # ── Section 7: Training ──
-    cells.append(md_cell(f"""## ⚙️ Section 6 — AutoML Training (PyCaret)
-
-Config: **{problem_type}** | train_size=`{train_size}` | fold=`{fold}` | normalize=`{normalize}`""", "s6"))
-
+    # ── TRAINING ──
+    cells.append(md_cell(banners["training"], "s6"))
     cells.append(code_cell(f"""{sp}_setup(data=df, target="{target_col}", train_size={train_size},
            fold={fold}, normalize={normalize}, verbose=True, session_id=42, n_jobs=-1)
 print("✅ PyCaret setup complete!")""", "s6_setup"))
-
-    cells.append(code_cell(f"""# ☕ This might take a few minutes
+    cells.append(code_cell(f"""# ☕ This might take a few minutes — sit back and relax!
 best_model = {sp}_compare(verbose=True, n_select=1)
 results = {sp}_pull()
-print("\\n✅ Done! Best model:", best_model)""", "s6_cmp"))
+print("\\n✅ Training complete! Best model:", best_model)""", "s6_cmp"))
 
-    # ── Section 8: Results — user selected charts only ──
+    # ── RESULTS ──
     results_added = False
 
     if trn.get("model_table"):
         if not results_added:
-            cells.append(md_cell("## 🏆 Section 7 — Results & Visualizations", "s7"))
+            cells.append(md_cell(banners["results"], "s7"))
             results_added = True
-        cells.append(code_cell(f"""# All models comparison table
-print("DataForge session results:")
+        cells.append(code_cell(f"""# 📋 All models comparison table
+print("DataForge ML Studio — Model Comparison Results:")
 print(\"\"\"{rs}\"\"\")
 results_df = {sp}_pull()
 results_df""", "s7_res"))
 
     if trn.get("bar_chart"):
         if not results_added:
-            cells.append(md_cell("## 🏆 Section 7 — Results & Visualizations", "s7"))
+            cells.append(md_cell(banners["results"], "s7"))
             results_added = True
-        cells.append(code_cell(f"""# Top models bar chart
+        cells.append(code_cell(f"""# 📊 Top models bar chart
 results_df = {sp}_pull()
 mc = results_df.select_dtypes(include='number').columns[0]
 ml = results_df.columns[0]
@@ -312,14 +575,14 @@ fig = go.Figure(go.Bar(x=top6[mc], y=top6[ml], orientation="h",
     marker_color=colors, text=top6[mc].round(4), textposition="inside",
     textfont=dict(size=11, color="white")))
 fig.update_layout(template="plotly_dark", height=380,
-    title=f"Top Models — {{mc}}", yaxis=dict(autorange="reversed"))
+    title=f"🏆 Top Models — {{mc}}", yaxis=dict(autorange="reversed"))
 fig.show()""", "s7_bar"))
 
     if trn.get("radar_chart"):
         if not results_added:
-            cells.append(md_cell("## 🏆 Section 7 — Results & Visualizations", "s7"))
+            cells.append(md_cell(banners["results"], "s7"))
             results_added = True
-        cells.append(code_cell(f"""# Best model metrics radar chart
+        cells.append(code_cell(f"""# 🕸️ Best model metrics radar chart
 results_df = {sp}_pull()
 nm = results_df.select_dtypes(include='number').columns[:6].tolist()
 bv = results_df.iloc[0][nm]
@@ -329,61 +592,52 @@ fig = go.Figure(go.Scatterpolar(
     fill="toself", fillcolor="rgba(74,222,128,0.18)",
     line=dict(color="#4ade80", width=2.5), marker=dict(size=6, color="#4ade80")))
 fig.update_layout(template="plotly_dark", height=400,
-    title="Best Model Metrics — {best_model_name}",
+    title="🕸️ Best Model Metrics — {best_model_name}",
     polar=dict(radialaxis=dict(visible=True, range=[0,1])))
 fig.show()""", "s7_radar"))
 
     if trn.get("feature_importance"):
         if not results_added:
-            cells.append(md_cell("## 🏆 Section 7 — Results & Visualizations", "s7"))
+            cells.append(md_cell(banners["results"], "s7"))
             results_added = True
-        cells.append(code_cell(f"""# Feature importance plot
+        cells.append(code_cell(f"""# ⭐ Feature importance
 try:
-    import matplotlib.pyplot as plt
-    from pycaret.{problem_type} import plot_model
-    plot_model(best_model, plot="feature", display_format="streamlit")
-except Exception:
-    # Manual feature importance via sklearn
-    try:
-        importances = best_model.feature_importances_
-        feature_names = df.drop(columns=["{target_col}"]).columns.tolist()
-        fi_df = pd.DataFrame({{"feature": feature_names, "importance": importances}})
-        fi_df = fi_df.sort_values("importance", ascending=True).tail(15)
-        fig = px.bar(fi_df, x="importance", y="feature", orientation="h",
-                     title="Feature Importance — {best_model_name}",
-                     color="importance", color_continuous_scale=["#60a5fa","#4ade80"])
-        fig.update_layout(template="plotly_dark", height=450)
-        fig.show()
-    except Exception as e:
-        print(f"Feature importance not available for this model: {{e}}")""", "s7_feat"))
+    importances = best_model.feature_importances_
+    feature_names = df.drop(columns=["{target_col}"]).columns.tolist()
+    fi_df = pd.DataFrame({{"feature": feature_names, "importance": importances}})
+    fi_df = fi_df.sort_values("importance", ascending=True).tail(15)
+    fig = px.bar(fi_df, x="importance", y="feature", orientation="h",
+                 title="⭐ Feature Importance — {best_model_name}",
+                 color="importance", color_continuous_scale=["#60a5fa","#4ade80"])
+    fig.update_layout(template="plotly_dark", height=450)
+    fig.show()
+except Exception as e:
+    print(f"Feature importance not available for this model: {{e}}")""", "s7_feat"))
 
-    # ── Section 9: Export — user selected options only ──
+    # ── EXPORT ──
     export_added = False
-
     if exp.get("save_model"):
         if not export_added:
-            cells.append(md_cell("## 💾 Section 8 — Save & Load Model", "s8"))
+            cells.append(md_cell(banners["export"], "s8"))
             export_added = True
         cells.append(code_cell(f"""{sp}_save(best_model, "best_model_dataforge")
-print("✅ Saved: best_model_dataforge.pkl")""", "s8_save"))
+print("✅ Model saved: best_model_dataforge.pkl")""", "s8_save"))
 
     if exp.get("load_predict"):
         if not export_added:
-            cells.append(md_cell("## 💾 Section 8 — Save & Load Model", "s8"))
+            cells.append(md_cell(banners["export"], "s8"))
             export_added = True
         cells.append(code_cell(f"""loaded_model = {sp}_load("best_model_dataforge")
 print("✅ Loaded:", type(loaded_model))
-
-# Make predictions on new data:
 # from {pm} import predict_model
 # df_new = df.drop(columns=[TARGET]).head(5)
 # preds = predict_model(loaded_model, data=df_new)
 # print(preds)""", "s8_load"))
 
+    # ── SUMMARY ──
     if exp.get("summary_table"):
-        cells.append(md_cell(f"""## 📋 Section 9 — Session Summary
-
-| Property | Value |
+        cells.append(md_cell(banners["summary"], "s9"))
+        cells.append(md_cell(f"""| Property | Value |
 |---|---|
 | Dataset | `{dataset_name}` |
 | Target | `{target_col}` |
@@ -395,11 +649,11 @@ print("✅ Loaded:", type(loaded_model))
 | Train Split | {int(train_size*100)}% / {int((1-train_size)*100)}% |
 | Normalize | {normalize} |
 
-**EDA included:** {", ".join(k for k,v in (eda or {}).items() if v) or "None"}
-**Preprocessing:** {", ".join(k for k,v in (pre or {}).items() if v) or "None"}
-**Result charts:** {", ".join(k for k,v in (trn or {}).items() if v) or "None"}
+> ⚡ Generated by **DataForge ML Studio** — AutoML for everyone, 100% free.""", "s9_sum"))
 
-> Generated by **DataForge ML Studio** ⚡ — Notebook Builder""", "s9"))
+    # ── ABOUT AUTHOR (last) ──
+    if styled["author"]:
+        cells.append(md_cell(styled["author"], "s_author"))
 
     notebook = {
         "nbformat": 4, "nbformat_minor": 5,
@@ -410,6 +664,108 @@ print("✅ Loaded:", type(loaded_model))
         "cells": cells
     }
     return _json.dumps(notebook, indent=2, ensure_ascii=False).encode("utf-8")
+
+
+# ─────────────────────────────────────────────
+#  KAGGLE UPLOAD FUNCTION
+# ─────────────────────────────────────────────
+def upload_notebook_to_kaggle(nb_bytes, notebook_title, dataset_name,
+                               kaggle_username, kaggle_key):
+    """
+    Kaggle API ke zariye notebook upload karta hai.
+    Returns: (success: bool, message: str, url: str)
+    """
+    try:
+        # Notebook slug — lowercase, spaces to dashes
+        slug = notebook_title.lower().replace(" ", "-").replace("_", "-")
+        slug = "".join(c for c in slug if c.isalnum() or c == "-")[:50]
+
+        # Write notebook to temp file
+        with tempfile.TemporaryDirectory() as tmpdir:
+            nb_path = os.path.join(tmpdir, "notebook.ipynb")
+            with open(nb_path, "wb") as f:
+                f.write(nb_bytes)
+
+            # kernel-metadata.json
+            metadata = {
+                "id": f"{kaggle_username}/{slug}",
+                "title": notebook_title,
+                "code_file": "notebook.ipynb",
+                "language": "python",
+                "kernel_type": "notebook",
+                "is_private": False,
+                "enable_gpu": False,
+                "enable_internet": True,
+                "dataset_sources": [],
+                "competition_sources": [],
+                "kernel_sources": []
+            }
+            meta_path = os.path.join(tmpdir, "kernel-metadata.json")
+            with open(meta_path, "w") as f:
+                _json.dump(metadata, f)
+
+            # Create zip
+            zip_path = os.path.join(tmpdir, "kernel.zip")
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.write(nb_path, "notebook.ipynb")
+                zf.write(meta_path, "kernel-metadata.json")
+
+            with open(zip_path, "rb") as zf:
+                zip_data = zf.read()
+
+        # Kaggle API call
+        auth = base64.b64encode(f"{kaggle_username}:{kaggle_key}".encode()).decode()
+        headers = {
+            "Authorization": f"Basic {auth}",
+            "Content-Type": "application/zip",
+        }
+
+        # Try push endpoint
+        params = {
+            "id": f"{kaggle_username}/{slug}",
+            "title": notebook_title,
+            "language": "python",
+            "kernelType": "notebook",
+            "isPrivate": False,
+        }
+
+        resp = requests.post(
+            "https://www.kaggle.com/api/v1/kernels/push",
+            headers={"Authorization": f"Basic {auth}"},
+            json={
+                "currentRunningVersion": 1,
+                "id": f"{kaggle_username}/{slug}",
+                "title": notebook_title,
+                "language": "python",
+                "kernelType": "notebook",
+                "isPrivate": False,
+                "enableGpu": False,
+                "enableInternet": True,
+                "datasetDataSources": [],
+                "kernelDataSources": [],
+                "competitionDataSources": [],
+                "categoryIds": [],
+                "dockerImagePinningType": "original",
+                "sourceType": "EDITOR_NOTEBOOK"
+            },
+            timeout=30
+        )
+
+        if resp.status_code in [200, 201]:
+            kaggle_url = f"https://www.kaggle.com/{kaggle_username}/{slug}"
+            return True, "✅ Notebook successfully uploaded to Kaggle!", kaggle_url
+        else:
+            # Parse error
+            try:
+                err_detail = resp.json().get("message", resp.text[:200])
+            except Exception:
+                err_detail = resp.text[:200]
+            return False, f"❌ Kaggle API Error ({resp.status_code}): {err_detail}", ""
+
+    except requests.exceptions.ConnectionError:
+        return False, "❌ Network error — internet connection check karo.", ""
+    except Exception as e:
+        return False, f"❌ Upload failed: {str(e)}", ""
 
 
 # ─────────────────────────────────────────────
@@ -450,7 +806,6 @@ def smart_sample(df, target_col, max_rows=MAX_ROWS_TRAINING):
         pass
     return df.sample(n=max_rows, random_state=SAMPLE_RANDOM_STATE).reset_index(drop=True)
 
-
 def safe_fold_count(df, target_col, requested_fold, problem_type):
     if problem_type != "classification":
         return requested_fold
@@ -461,7 +816,6 @@ def safe_fold_count(df, target_col, requested_fold, problem_type):
         return safe_fold
     except Exception:
         return max(2, requested_fold)
-
 
 def drop_rare_classes(df, target_col, min_count=2):
     try:
@@ -479,7 +833,6 @@ def drop_rare_classes(df, target_col, min_count=2):
         pass
     return df, None
 
-
 def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
                               normalize, remove_out, max_models=None):
     warnings_list = []
@@ -490,34 +843,23 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
         if rare_warn:
             warnings_list.append(rare_warn)
         if len(df) < 10:
-            raise ValueError(
-                "Dataset mein bahut kam samples hain. "
-                "Target column sahi select kiya hai?"
-            )
+            raise ValueError("Dataset mein bahut kam samples hain. Target column sahi select kiya hai?")
 
     original_rows = len(df)
     if original_rows > MAX_ROWS_TRAINING:
         df_train = smart_sample(df, target_col, MAX_ROWS_TRAINING)
-        warnings_list.append(
-            f"\u26a0\ufe0f Dataset {original_rows:,} rows — auto-sampled to **{MAX_ROWS_TRAINING:,} rows**."
-        )
+        warnings_list.append(f"\u26a0\ufe0f Dataset {original_rows:,} rows — auto-sampled to **{MAX_ROWS_TRAINING:,} rows**.")
     elif original_rows > MAX_ROWS_WARNING:
         df_train = df.copy()
-        warnings_list.append(
-            f"\U0001f4a1 Dataset {original_rows:,} rows — training chalegi lekin agar crash ho toh {MAX_ROWS_WARNING:,} rows tak chota karo."
-        )
+        warnings_list.append(f"\U0001f4a1 Dataset {original_rows:,} rows — training chalegi lekin agar crash ho toh {MAX_ROWS_WARNING:,} rows tak chota karo.")
     else:
         df_train = df.copy()
 
     safe_fold = safe_fold_count(df_train, target_col, fold, problem_type)
     if safe_fold != fold:
-        warnings_list.append(
-            f"\u26a0\ufe0f **CV Folds {fold} se {safe_fold} reduce** — kuch classes mein kam samples hain. "
-            f"Training {safe_fold}-fold ke saath continue ho rahi hai."
-        )
+        warnings_list.append(f"\u26a0\ufe0f **CV Folds {fold} se {safe_fold} reduce** — kuch classes mein kam samples hain.")
 
     include_models = ALL_CLF_MODELS if problem_type == "classification" else ALL_REG_MODELS
-
     if max_models and max_models < len(include_models):
         include_models = include_models[:max_models]
 
@@ -548,10 +890,7 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
         if "least populated" in err or "stratif" in err or "minimum number of groups" in err:
             raise ValueError(
                 "Cross-validation error: Kuch target classes mein bohot kam samples hain.\n\n"
-                "Solutions:\n"
-                "- CV Folds slider ko 2 par set karo\n"
-                "- Un rows ko dataset se hata do jinka target value sirf 1-2 baar aata hai\n"
-                "- Ya ek alag target column choose karo"
+                "Solutions:\n- CV Folds slider ko 2 par set karo\n- Un rows ko dataset se hata do\n- Ya ek alag target column choose karo"
             )
         raise
 
@@ -723,6 +1062,8 @@ div[data-testid="column"]:nth-child(3) .stButton>button:hover{{border-color:{ACC
 .stAlert{{border-radius:12px !important;border-left-width:4px !important;background:{CARD_BG} !important;}}
 @keyframes slideUp{{from{{opacity:0;transform:translateY(18px)}}to{{opacity:1;transform:none}}}}
 .slide-up{{animation:slideUp .45s ease-out both;}}
+.kaggle-upload-box{{background:{"rgba(32,163,220,0.08)" if T=="dark" else "rgba(32,163,220,0.06)"};border:2px solid {"rgba(32,163,220,0.35)" if T=="dark" else "rgba(32,163,220,0.40)"};border-radius:16px;padding:1.5rem;margin-top:1rem;}}
+.kaggle-success{{background:{"rgba(74,222,128,0.10)" if T=="dark" else "rgba(74,222,128,0.12)"};border:2px solid {"rgba(74,222,128,0.4)" if T=="dark" else "rgba(74,222,128,0.5)"};border-radius:14px;padding:1.25rem 1.5rem;margin-top:1rem;}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -843,7 +1184,6 @@ with st.sidebar:
 
     st.markdown(f'<div class="sidebar-title">⚡ Stack</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sidebar-section"><span class="insight-chip">PyCaret</span><span class="insight-chip">Plotly</span><span class="insight-chip">Pandas</span><span class="insight-chip">Streamlit</span></div>', unsafe_allow_html=True)
-
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
 
 
@@ -1030,39 +1370,19 @@ if st.session_state.data is not None:
             </div>""", unsafe_allow_html=True)
 
             if len(df) > MAX_ROWS_TRAINING:
-                st.error(
-                    f"🚨 **Dataset {len(df):,} rows** — too large for free hosting.  \n"
-                    f"Training will auto-sample **{MAX_ROWS_TRAINING:,} rows** (stratified)."
-                )
+                st.error(f"🚨 **Dataset {len(df):,} rows** — too large for free hosting. Training will auto-sample **{MAX_ROWS_TRAINING:,} rows** (stratified).")
             elif len(df) > MAX_ROWS_WARNING:
-                st.warning(
-                    f"⚠️ **{len(df):,} rows** — thoda bada hai. Training chalegi lekin "
-                    f"agar crash ho toh {MAX_ROWS_WARNING:,} rows tak chota karo."
-                )
+                st.warning(f"⚠️ **{len(df):,} rows** — thoda bada hai. Training chalegi lekin agar crash ho toh {MAX_ROWS_WARNING:,} rows tak chota karo.")
 
             available_models = ALL_CLF_MODELS if ptype == "classification" else ALL_REG_MODELS
 
             st.markdown(f"""
-            <div style="background:linear-gradient(135deg,rgba(74,222,128,0.12),rgba(96,165,250,0.08));
-                        border:1.5px solid rgba(74,222,128,0.4);border-radius:14px;
-                        padding:.9rem 1.25rem;margin:.75rem 0;display:flex;align-items:center;gap:1rem">
+            <div style="background:linear-gradient(135deg,rgba(74,222,128,0.12),rgba(96,165,250,0.08));border:1.5px solid rgba(74,222,128,0.4);border-radius:14px;padding:.9rem 1.25rem;margin:.75rem 0;display:flex;align-items:center;gap:1rem">
               <div style="font-size:2rem">🎁</div>
               <div>
-                <div style="font-size:.9rem;font-weight:900;color:#4ade80;letter-spacing:.02em">
-                  ALL FEATURES UNLOCKED — 100% FREE
-                </div>
-                <div style="font-size:.72rem;color:#9ca3af;margin-top:.15rem">
-                  XGBoost ✅ &nbsp; LightGBM ✅ &nbsp; CatBoost ✅ &nbsp; 10-fold CV ✅ &nbsp; Unlimited Training ✅ &nbsp; Model Export ✅
-                </div>
+                <div style="font-size:.9rem;font-weight:900;color:#4ade80;letter-spacing:.02em">ALL FEATURES UNLOCKED — 100% FREE</div>
+                <div style="font-size:.72rem;color:#9ca3af;margin-top:.15rem">XGBoost ✅ &nbsp; LightGBM ✅ &nbsp; CatBoost ✅ &nbsp; 10-fold CV ✅ &nbsp; Unlimited Training ✅ &nbsp; Model Export ✅</div>
               </div>
-            </div>""", unsafe_allow_html=True)
-
-            st.markdown(f"""
-            <div style="background:{"rgba(255,255,255,0.03)" if T=="dark" else "rgba(0,0,0,0.03)"};border:1px solid {BORDER};border-radius:12px;padding:1rem 1.25rem;margin:.75rem 0">
-              <span class="insight-chip">🤖 {len(available_models)} algorithms available</span>
-              <span class="insight-chip">📦 XGBoost ✅ LightGBM ✅ CatBoost ✅</span>
-              <span class="insight-chip">💾 Max {MAX_ROWS_TRAINING:,} rows (auto-sample)</span>
-              <span class="insight-chip">💡 Free forever</span>
             </div>""", unsafe_allow_html=True)
 
             with st.expander("⚙️ Advanced Configuration", expanded=False):
@@ -1071,30 +1391,14 @@ if st.session_state.data is not None:
                     train_size = st.slider("Training Split", 0.5, 0.9, 0.8, 0.05)
                 with ac2:
                     recommended_fold = min(3, 10) if len(df) > MAX_ROWS_WARNING else 5
-                    fold = st.slider(
-                        "CV Folds (max 10)",
-                        min_value=2, max_value=10,
-                        value=min(recommended_fold, 10),
-                        help="Higher folds = more accurate but slower. 5 is usually optimal."
-                    )
+                    fold = st.slider("CV Folds (max 10)", min_value=2, max_value=10, value=min(recommended_fold, 10))
                 with ac3:
-                    max_models_slider = st.slider(
-                        f"Max Models ({len(available_models)} available)",
-                        min_value=2,
-                        max_value=len(available_models),
-                        value=len(available_models),
-                    )
+                    max_models_slider = st.slider(f"Max Models ({len(available_models)} available)", min_value=2, max_value=len(available_models), value=len(available_models))
                 ac4, ac5 = st.columns(2)
                 with ac4:
                     normalize = st.checkbox("Normalize Features", value=True)
                 with ac5:
                     remove_out = st.checkbox("Remove Outliers", value=False)
-                st.markdown(
-                    f'<div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.30);'
-                    f'border-radius:8px;padding:.6rem .9rem;font-size:.78rem;color:{ACCENTY}">'
-                    f'💡 <b>Memory Tip:</b> Fewer folds = less RAM. Bade datasets ke liye 2-3 folds use karo.</div>',
-                    unsafe_allow_html=True
-                )
 
             st.session_state.cv_fold = fold
 
@@ -1130,12 +1434,8 @@ if st.session_state.data is not None:
                     for i, lbl in enumerate(steps_labels):
                         cls    = "done"   if i < done_count else ("active" if i == done_count else "")
                         icon_s = "✓"      if i < done_count else ("◉"      if i == done_count else str(i+1))
-                        html += (
-                            f'<div class="step-item {cls}">'
-                            f'<div class="step-dot {cls}">{icon_s}</div>'
-                            f'<div><div class="step-label">{lbl}</div></div>'
-                            f'</div>'
-                        )
+                        html += (f'<div class="step-item {cls}"><div class="step-dot {cls}">{icon_s}</div>'
+                                 f'<div><div class="step-label">{lbl}</div></div></div>')
                     return html + "</div>"
 
                 timeline_box.markdown(render_steps(0), unsafe_allow_html=True)
@@ -1144,14 +1444,9 @@ if st.session_state.data is not None:
 
                 try:
                     best, results, elapsed, warn_msgs, trained_rows = run_memory_safe_training(
-                        df           = df,
-                        target_col   = target_col,
-                        problem_type = ptype,
-                        train_size   = train_size,
-                        fold         = fold,
-                        normalize    = normalize,
-                        remove_out   = remove_out,
-                        max_models   = max_models_slider,
+                        df=df, target_col=target_col, problem_type=ptype,
+                        train_size=train_size, fold=fold, normalize=normalize,
+                        remove_out=remove_out, max_models=max_models_slider,
                     )
 
                     progress_bar.progress(100)
@@ -1183,30 +1478,15 @@ if st.session_state.data is not None:
                     except Exception:
                         pass
 
-                    status_box.success(
-                        f"✅ Training complete in **{fmt_time(elapsed)}** "
-                        f"({trained_rows:,} rows) — 🏆 Check the Results tab!"
-                    )
+                    status_box.success(f"✅ Training complete in **{fmt_time(elapsed)}** ({trained_rows:,} rows) — 🏆 Check the Results tab!")
                     st.balloons()
 
                 except MemoryError as me:
-                    progress_bar.progress(0)
-                    timeline_box.empty()
-                    status_box.error(
-                        f"💥 **Memory Overflow!**  \n{str(me)}  \n\n"
-                        f"**Quick fixes:**  \n"
-                        f"- Dataset ko {MAX_ROWS_TRAINING:,} rows se kam karo  \n"
-                        f"- Page refresh karo (Ctrl+R) aur dobara try karo  \n"
-                        f"- CV Folds ko 2 par set karo"
-                    )
+                    progress_bar.progress(0); timeline_box.empty()
+                    status_box.error(f"💥 **Memory Overflow!**\n{str(me)}")
                 except Exception as e:
-                    progress_bar.progress(0)
-                    timeline_box.empty()
-                    err_str = str(e)
-                    if any(kw in err_str.lower() for kw in ["memory","killed","oom","cannot allocate"]):
-                        status_box.error("💥 **Memory Crash!** Dataset chota karo aur page refresh karo.")
-                    else:
-                        status_box.error(f"❌ Training failed: {err_str}")
+                    progress_bar.progress(0); timeline_box.empty()
+                    status_box.error(f"❌ Training failed: {str(e)}")
 
     # ═══════════════════════════
     # TAB 4 — RESULTS
@@ -1241,7 +1521,6 @@ if st.session_state.data is not None:
               </div>
             </div>""", unsafe_allow_html=True)
 
-            # ── Download buttons: 3 columns ──
             ex1, ex2, ex3 = st.columns(3)
             with ex1:
                 st.download_button("📥 Export Results CSV", res_df.to_csv(index=False),
@@ -1250,53 +1529,49 @@ if st.session_state.data is not None:
                 if os.path.exists("best_model.pkl"):
                     with open("best_model.pkl", "rb") as pkl_f:
                         pkl_bytes = pkl_f.read()
-                    st.download_button(
-                        "📦 Download Model (.pkl)",
-                        data=pkl_bytes,
-                        file_name=f"best_model_{best_name.replace(' ','_')}.pkl",
-                        mime="application/octet-stream",
-                        help="Trained model file — load with PyCaret's load_model()"
-                    )
+                    st.download_button("📦 Download Model (.pkl)", data=pkl_bytes,
+                                       file_name=f"best_model_{best_name.replace(' ','_')}.pkl",
+                                       mime="application/octet-stream")
                 else:
-                    st.info("💾 Model file generates after training. Re-train to get it.")
+                    st.info("💾 Model file generates after training.")
             with ex3:
                 try:
                     nb_bytes = generate_notebook(
-                        df              = df,
-                        target_col      = target_col,
-                        problem_type    = st.session_state.problem_type,
-                        results_df      = res_df,
-                        best_model_name = best_name,
-                        top_score       = top_score,
-                        metric_name     = metric_name,
-                        dataset_name    = str(st.session_state.dataset_name or "dataset"),
-                        training_time   = st.session_state.training_time or 0,
-                        fold            = st.session_state.cv_fold or 5,
-                        normalize       = True,
-                        train_size      = 0.8,
-                        eda_selections  = st.session_state.get("nb_eda"),
-                        pre_selections  = st.session_state.get("nb_pre"),
-                        train_selections= st.session_state.get("nb_train"),
+                        df=df, target_col=target_col, problem_type=st.session_state.problem_type,
+                        results_df=res_df, best_model_name=best_name, top_score=top_score,
+                        metric_name=metric_name, dataset_name=str(st.session_state.dataset_name or "dataset"),
+                        training_time=st.session_state.training_time or 0,
+                        fold=st.session_state.cv_fold or 5, normalize=True, train_size=0.8,
+                        eda_selections=st.session_state.get("nb_eda"),
+                        pre_selections=st.session_state.get("nb_pre"),
+                        train_selections=st.session_state.get("nb_train"),
                         export_selections=st.session_state.get("nb_export"),
+                        author_name=st.session_state.get("author_name",""),
+                        author_title=st.session_state.get("author_title",""),
+                        author_quote=st.session_state.get("author_quote",""),
+                        author_email=st.session_state.get("author_email",""),
+                        author_linkedin=st.session_state.get("author_linkedin",""),
+                        author_github=st.session_state.get("author_github",""),
+                        author_kaggle=st.session_state.get("author_kaggle",""),
+                        author_facebook=st.session_state.get("author_facebook",""),
                     )
                     safe_name = str(st.session_state.dataset_name or "dataset").replace(" ","_").replace(".","_")
                     st.download_button(
-                        label     = "📓 Download Notebook (.ipynb)",
-                        data      = nb_bytes,
-                        file_name = f"dataforge_{safe_name}_{best_name.replace(' ','_')}.ipynb",
-                        mime      = "application/x-ipynb+json",
-                        help      = "Complete Jupyter Notebook — EDA + Training + Results + Model Export"
+                        label="📓 Download Notebook (.ipynb)",
+                        data=nb_bytes,
+                        file_name=f"dataforge_{safe_name}_{best_name.replace(' ','_')}.ipynb",
+                        mime="application/x-ipynb+json"
                     )
                 except Exception as nb_err:
                     st.error(f"Notebook generation failed: {nb_err}")
 
             st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
             st.markdown(f"""<div class="section-head"><div class="icon-wrap">📋</div><h3>All Models Ranked</h3></div>""", unsafe_allow_html=True)
-            styled = (res_df.style
+            styled_df = (res_df.style
                       .background_gradient(cmap="RdYlGn", subset=num_res)
                       .format({c: "{:.4f}" for c in num_res})
                       .set_properties(**{"font-family":"JetBrains Mono,monospace","font-size":"12px"}))
-            st.dataframe(styled, height=360)
+            st.dataframe(styled_df, height=360)
 
             st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
             ch1, ch2 = st.columns(2)
@@ -1323,11 +1598,10 @@ if st.session_state.data is not None:
                 st.plotly_chart(fig_r, width="stretch")
 
     # ═══════════════════════════
-    # TAB 5 — HISTORY (session only)
+    # TAB 5 — HISTORY
     # ═══════════════════════════
     with tab5:
         training_log = st.session_state.get("training_history", [])
-
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">🗂️</div><h3>This Session's Training History</h3></div>""", unsafe_allow_html=True)
         st.caption("History is saved for this browser session. Refresh page se history reset hoti hai.")
 
@@ -1357,46 +1631,33 @@ if st.session_state.data is not None:
                 </div>""", unsafe_allow_html=True)
 
             tlog_df = pd.DataFrame(training_log)
-            st.download_button("📥 Export History CSV", tlog_df.to_csv(index=False),
-                               "training_history.csv", "text/csv")
+            st.download_button("📥 Export History CSV", tlog_df.to_csv(index=False), "training_history.csv", "text/csv")
 
     # ═══════════════════════════════════════════
-    # TAB 6 — NOTEBOOK BUILDER
+    # TAB 6 — NOTEBOOK BUILDER (UPDATED)
     # ═══════════════════════════════════════════
     with tab6:
 
-        # ── Session state init for notebook builder ──
-        if "nb_step" not in st.session_state:
-            st.session_state.nb_step = 1
-        if "nb_ptype" not in st.session_state:
-            st.session_state.nb_ptype = st.session_state.problem_type or "classification"
-        if "nb_eda" not in st.session_state:
-            st.session_state.nb_eda = {
-                "distributions": True, "correlation": True, "missing": True,
-                "target_dist": True, "boxplots": False, "scatter_matrix": False,
-                "cat_bars": False, "outlier_plot": False,
-            }
-        if "nb_pre" not in st.session_state:
-            st.session_state.nb_pre = {
-                "drop_dups": True, "handle_missing": True,
-                "normalize": True, "remove_outliers": False,
-            }
-        if "nb_train" not in st.session_state:
-            st.session_state.nb_train = {
-                "model_table": True, "bar_chart": True,
-                "radar_chart": True, "feature_importance": False,
-            }
-        if "nb_export" not in st.session_state:
-            st.session_state.nb_export = {
-                "save_model": True, "load_predict": True, "summary_table": True,
-            }
+        # Session state init
+        for k, v in [
+            ("nb_step", 1), ("nb_ptype", st.session_state.problem_type or "classification"),
+            ("nb_eda", {"distributions":True,"correlation":True,"missing":True,"target_dist":True,"boxplots":False,"scatter_matrix":False,"cat_bars":False,"outlier_plot":False}),
+            ("nb_pre", {"drop_dups":True,"handle_missing":True,"normalize":True,"remove_outliers":False}),
+            ("nb_train", {"model_table":True,"bar_chart":True,"radar_chart":True,"feature_importance":False}),
+            ("nb_export", {"save_model":True,"load_predict":True,"summary_table":True}),
+            ("author_name",""), ("author_title",""), ("author_quote",""),
+            ("author_email",""), ("author_linkedin",""), ("author_github",""),
+            ("author_kaggle",""), ("author_facebook",""),
+            ("kaggle_username",""), ("kaggle_key",""),
+            ("nb_last_bytes", None), ("nb_last_filename",""),
+        ]:
+            if k not in st.session_state:
+                st.session_state[k] = v
 
         step = st.session_state.nb_step
 
-        # ── Step indicator CSS ──
         st.markdown(f"""
         <style>
-        .nb-step-row{{display:flex;gap:14px;margin-bottom:20px;align-items:flex-start;}}
         .nb-dot{{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.8rem;font-weight:700;flex-shrink:0;margin-top:2px;}}
         .nb-dot-done{{background:{"rgba(74,222,128,0.15)" if T=="dark" else "rgba(74,222,128,0.20)"};color:#4ade80;border:2px solid #4ade80;}}
         .nb-dot-active{{background:{"rgba(96,165,250,0.15)" if T=="dark" else "rgba(96,165,250,0.15)"};color:#60a5fa;border:2px solid #60a5fa;animation:nb-pulse 1.5s infinite;}}
@@ -1407,28 +1668,14 @@ if st.session_state.data is not None:
         .nb-line-idle{{background:{BORDER};}}
         .nb-step-title{{font-size:.95rem;font-weight:700;color:{TEXT1};padding-top:5px;}}
         .nb-step-title-idle{{font-size:.95rem;font-weight:600;color:{TEXT3};padding-top:5px;}}
-        .nb-chip-grid{{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}}
-        .nb-chip-on{{display:inline-flex;align-items:center;gap:5px;padding:5px 13px;border-radius:8px;font-size:.78rem;font-weight:600;background:{"rgba(74,222,128,0.12)" if T=="dark" else "rgba(74,222,128,0.15)"};color:#4ade80;border:1px solid rgba(74,222,128,0.4);cursor:pointer;}}
-        .nb-chip-off{{display:inline-flex;align-items:center;gap:5px;padding:5px 13px;border-radius:8px;font-size:.78rem;font-weight:600;background:{BG3};color:{TEXT3};border:1px solid {BORDER};cursor:pointer;}}
-        .nb-toggle-row{{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid {BORDER};}}
-        .nb-toggle-row:last-child{{border-bottom:none;}}
-        .nb-tgl-label{{font-size:.85rem;font-weight:600;color:{TEXT1};}}
-        .nb-tgl-sub{{font-size:.72rem;color:{TEXT3};margin-top:2px;}}
-        .nb-card{{background:{CARD_BG};border:1px solid {BORDER};border-radius:14px;padding:1rem 1.25rem;margin-top:10px;}}
         </style>
         """, unsafe_allow_html=True)
 
-        # ── Header ──
-        st.markdown(f"""
-        <div class="section-head"><div class="icon-wrap">📓</div><h3>Notebook Builder</h3></div>
+        st.markdown(f"""<div class="section-head"><div class="icon-wrap">📓</div><h3>Notebook Builder</h3></div>
         <div style="font-size:.85rem;color:{TEXT2};margin-bottom:1.5rem">
-          Step-by-step select karo kya kya notebook mein add karna hai — phir ek click mein complete <b>.ipynb</b> download hoga.
-        </div>
-        """, unsafe_allow_html=True)
+          Step-by-step configure karo — styled HTML markdown + Kaggle upload support included!
+        </div>""", unsafe_allow_html=True)
 
-        # ────────────────────────────────
-        # STEP 1 — Problem Type
-        # ────────────────────────────────
         def dot(n):
             if n < step: return f'<div class="nb-dot nb-dot-done">✓</div>'
             elif n == step: return f'<div class="nb-dot nb-dot-active">{n}</div>'
@@ -1438,7 +1685,7 @@ if st.session_state.data is not None:
             cls = "nb-line-done" if n < step else "nb-line-idle"
             return f'<div class="nb-line {cls}" style="height:12px"></div>'
 
-        # Step 1
+        # ── STEP 1: Problem Type ──
         with st.container():
             col_dot, col_body = st.columns([1, 12])
             with col_dot:
@@ -1459,7 +1706,7 @@ if st.session_state.data is not None:
 
         st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-        # Step 2 — EDA Charts
+        # ── STEP 2: EDA ──
         with st.container():
             col_dot, col_body = st.columns([1, 12])
             with col_dot:
@@ -1467,8 +1714,6 @@ if st.session_state.data is not None:
             with col_body:
                 if step >= 2:
                     st.markdown(f'<div class="nb-step-title">EDA — charts select karo</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin:.4rem 0 .75rem">Jo charts chahiye notebook mein, woh ON karo:</div>', unsafe_allow_html=True)
-
                     eda = st.session_state.nb_eda
                     ec1, ec2 = st.columns(2)
                     with ec1:
@@ -1482,24 +1727,20 @@ if st.session_state.data is not None:
                         eda["cat_bars"]       = st.checkbox("📋 Category bar charts",     value=eda["cat_bars"],       key="eda_cat")
                         eda["outlier_plot"]   = st.checkbox("⚠️ Outlier detection plot",  value=eda["outlier_plot"],   key="eda_out")
                     st.session_state.nb_eda = eda
-
                     selected_count = sum(1 for v in eda.values() if v)
                     st.markdown(f'<div style="font-size:.75rem;color:{ACCENT1};margin-top:.5rem">✓ {selected_count} chart(s) selected</div>', unsafe_allow_html=True)
-
                     if step == 2:
                         nb2c1, nb2c2 = st.columns([1, 4])
                         with nb2c1:
-                            if st.button("← Back", key="nb_back2"):
-                                st.session_state.nb_step = 1; st.rerun()
+                            if st.button("← Back", key="nb_back2"): st.session_state.nb_step = 1; st.rerun()
                         with nb2c2:
-                            if st.button("Continue →", key="nb_next2"):
-                                st.session_state.nb_step = 3; st.rerun()
+                            if st.button("Continue →", key="nb_next2"): st.session_state.nb_step = 3; st.rerun()
                 else:
                     st.markdown(f'<div class="nb-step-title-idle">EDA — charts select karo</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-        # Step 3 — Preprocessing
+        # ── STEP 3: Preprocessing ──
         with st.container():
             col_dot, col_body = st.columns([1, 12])
             with col_dot:
@@ -1507,29 +1748,24 @@ if st.session_state.data is not None:
             with col_body:
                 if step >= 3:
                     st.markdown(f'<div class="nb-step-title">Preprocessing steps</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin:.4rem 0 .75rem">Notebook mein kaunse preprocessing steps include karne hain:</div>', unsafe_allow_html=True)
-
                     pre = st.session_state.nb_pre
-                    pre["drop_dups"]       = st.checkbox("🗑️ Drop duplicate rows",      value=pre["drop_dups"],       key="pre_dups")
-                    pre["handle_missing"]  = st.checkbox("🩹 Handle missing values",     value=pre["handle_missing"],  key="pre_miss")
-                    pre["normalize"]       = st.checkbox("⚖️ Normalize features",        value=pre["normalize"],       key="pre_norm")
-                    pre["remove_outliers"] = st.checkbox("🚫 Remove outliers (reg only)",value=pre["remove_outliers"], key="pre_out")
+                    pre["drop_dups"]       = st.checkbox("🗑️ Drop duplicate rows",       value=pre["drop_dups"],       key="pre_dups")
+                    pre["handle_missing"]  = st.checkbox("🩹 Handle missing values",      value=pre["handle_missing"],  key="pre_miss")
+                    pre["normalize"]       = st.checkbox("⚖️ Normalize features",         value=pre["normalize"],       key="pre_norm")
+                    pre["remove_outliers"] = st.checkbox("🚫 Remove outliers (reg only)", value=pre["remove_outliers"], key="pre_out")
                     st.session_state.nb_pre = pre
-
                     if step == 3:
                         nb3c1, nb3c2 = st.columns([1, 4])
                         with nb3c1:
-                            if st.button("← Back", key="nb_back3"):
-                                st.session_state.nb_step = 2; st.rerun()
+                            if st.button("← Back", key="nb_back3"): st.session_state.nb_step = 2; st.rerun()
                         with nb3c2:
-                            if st.button("Continue →", key="nb_next3"):
-                                st.session_state.nb_step = 4; st.rerun()
+                            if st.button("Continue →", key="nb_next3"): st.session_state.nb_step = 4; st.rerun()
                 else:
                     st.markdown(f'<div class="nb-step-title-idle">Preprocessing steps</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-        # Step 4 — Training / Results Charts
+        # ── STEP 4: Training Charts ──
         with st.container():
             col_dot, col_body = st.columns([1, 12])
             with col_dot:
@@ -1537,137 +1773,222 @@ if st.session_state.data is not None:
             with col_body:
                 if step >= 4:
                     st.markdown(f'<div class="nb-step-title">Training & results charts</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin:.4rem 0 .75rem">Results section mein kaunse charts add karne hain:</div>', unsafe_allow_html=True)
-
                     tr = st.session_state.nb_train
-                    tr["model_table"]       = st.checkbox("📋 All models comparison table",  value=tr["model_table"],       key="tr_tbl")
-                    tr["bar_chart"]         = st.checkbox("📊 Top models bar chart",         value=tr["bar_chart"],         key="tr_bar")
-                    tr["radar_chart"]       = st.checkbox("🕸️ Best model metrics radar",     value=tr["radar_chart"],       key="tr_rad")
-                    tr["feature_importance"]= st.checkbox("⭐ Feature importance plot",      value=tr["feature_importance"],key="tr_feat")
+                    tr["model_table"]        = st.checkbox("📋 All models comparison table",  value=tr["model_table"],        key="tr_tbl")
+                    tr["bar_chart"]          = st.checkbox("📊 Top models bar chart",          value=tr["bar_chart"],          key="tr_bar")
+                    tr["radar_chart"]        = st.checkbox("🕸️ Best model metrics radar",      value=tr["radar_chart"],        key="tr_rad")
+                    tr["feature_importance"] = st.checkbox("⭐ Feature importance plot",       value=tr["feature_importance"], key="tr_feat")
                     st.session_state.nb_train = tr
-
                     if step == 4:
                         nb4c1, nb4c2 = st.columns([1, 4])
                         with nb4c1:
-                            if st.button("← Back", key="nb_back4"):
-                                st.session_state.nb_step = 3; st.rerun()
+                            if st.button("← Back", key="nb_back4"): st.session_state.nb_step = 3; st.rerun()
                         with nb4c2:
-                            if st.button("Continue →", key="nb_next4"):
-                                st.session_state.nb_step = 5; st.rerun()
+                            if st.button("Continue →", key="nb_next4"): st.session_state.nb_step = 5; st.rerun()
                 else:
                     st.markdown(f'<div class="nb-step-title-idle">Training & results charts</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-        # Step 5 — Export + Generate
+        # ── STEP 5: Author Info ──
         with st.container():
             col_dot, col_body = st.columns([1, 12])
             with col_dot:
-                st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(5)}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(5)}{line(5)}</div>', unsafe_allow_html=True)
             with col_body:
                 if step >= 5:
-                    st.markdown(f'<div class="nb-step-title">Model export & generate</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin:.4rem 0 .75rem">Final section mein kya include karna hai:</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="nb-step-title">🧑‍💻 About the Author (optional)</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin:.4rem 0 .75rem">Notebook ke end mein styled author section add hoga. Sab optional hai — jo fill karo woh show hoga.</div>', unsafe_allow_html=True)
+
+                    a1, a2 = st.columns(2)
+                    with a1:
+                        st.session_state.author_name  = st.text_input("👤 Your Name",        value=st.session_state.author_name,  placeholder="e.g. Muhammad Shayan",      key="inp_aname")
+                        st.session_state.author_email = st.text_input("📧 Email",             value=st.session_state.author_email, placeholder="you@email.com",              key="inp_aemail")
+                        st.session_state.author_linkedin = st.text_input("🔗 LinkedIn URL",   value=st.session_state.author_linkedin, placeholder="https://linkedin.com/in/...", key="inp_alinkedin")
+                        st.session_state.author_github = st.text_input("💻 GitHub URL",      value=st.session_state.author_github, placeholder="https://github.com/...",    key="inp_agithub")
+                    with a2:
+                        st.session_state.author_title = st.text_input("💼 Your Title",        value=st.session_state.author_title,  placeholder="e.g. AI Engineer & Developer", key="inp_atitle")
+                        st.session_state.author_quote = st.text_input("💡 Favorite Quote",    value=st.session_state.author_quote,  placeholder="e.g. Errors don't stop me...", key="inp_aquote")
+                        st.session_state.author_kaggle = st.text_input("🧠 Kaggle Profile URL", value=st.session_state.author_kaggle, placeholder="https://kaggle.com/...",  key="inp_akaggle")
+                        st.session_state.author_facebook = st.text_input("📘 Facebook URL",   value=st.session_state.author_facebook, placeholder="https://facebook.com/...", key="inp_afacebook")
+
+                    if step == 5:
+                        nb5c1, nb5c2 = st.columns([1, 4])
+                        with nb5c1:
+                            if st.button("← Back", key="nb_back5"): st.session_state.nb_step = 4; st.rerun()
+                        with nb5c2:
+                            if st.button("Continue →", key="nb_next5"): st.session_state.nb_step = 6; st.rerun()
+                else:
+                    st.markdown(f'<div class="nb-step-title-idle">🧑‍💻 About the Author</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+        # ── STEP 6: Export + Kaggle Upload ──
+        with st.container():
+            col_dot, col_body = st.columns([1, 12])
+            with col_dot:
+                st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(6)}</div>', unsafe_allow_html=True)
+            with col_body:
+                if step >= 6:
+                    st.markdown(f'<div class="nb-step-title">💾 Export & Kaggle Upload</div>', unsafe_allow_html=True)
 
                     ex = st.session_state.nb_export
-                    ex["save_model"]    = st.checkbox("💾 Save model (.pkl)",           value=ex["save_model"],    key="ex_save")
-                    ex["load_predict"]  = st.checkbox("🔮 Load model & predict example", value=ex["load_predict"],  key="ex_pred")
-                    ex["summary_table"] = st.checkbox("📋 Session summary table",        value=ex["summary_table"], key="ex_sum")
+                    ex["save_model"]    = st.checkbox("💾 Save model (.pkl)",            value=ex["save_model"],    key="ex_save")
+                    ex["load_predict"]  = st.checkbox("🔮 Load model & predict example",  value=ex["load_predict"],  key="ex_pred")
+                    ex["summary_table"] = st.checkbox("📋 Session summary table",         value=ex["summary_table"], key="ex_sum")
                     st.session_state.nb_export = ex
-
-                    # ── Summary of selections ──
-                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-                    st.markdown(f'<div style="font-size:.8rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{TEXT3};margin-bottom:.75rem">📋 Notebook Summary</div>', unsafe_allow_html=True)
-
-                    eda   = st.session_state.nb_eda
-                    pre   = st.session_state.nb_pre
-                    train = st.session_state.nb_train
-                    expt  = st.session_state.nb_export
-
-                    eda_labels   = {"distributions":"Distributions","correlation":"Heatmap","missing":"Missing values","target_dist":"Target dist","boxplots":"Box plots","scatter_matrix":"Scatter matrix","cat_bars":"Cat bars","outlier_plot":"Outlier plot"}
-                    pre_labels   = {"drop_dups":"Drop dups","handle_missing":"Handle missing","normalize":"Normalize","remove_outliers":"Remove outliers"}
-                    train_labels = {"model_table":"Model table","bar_chart":"Bar chart","radar_chart":"Radar chart","feature_importance":"Feature importance"}
-                    exp_labels   = {"save_model":"Save model","load_predict":"Load & predict","summary_table":"Summary table"}
-
-                    def chips_html(d, labels, color):
-                        out = ""
-                        for k, v in d.items():
-                            label = labels.get(k, k)
-                            if v:
-                                out += f'<span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:6px;font-size:.72rem;font-weight:700;margin:2px;background:{"rgba(74,222,128,0.12)" if color=="green" else "rgba(96,165,250,0.12)"};color:{"#4ade80" if color=="green" else "#60a5fa"};border:1px solid {"rgba(74,222,128,0.35)" if color=="green" else "rgba(96,165,250,0.35)"}">✓ {label}</span>'
-                            else:
-                                out += f'<span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:6px;font-size:.72rem;margin:2px;background:{BG3};color:{TEXT3};border:1px solid {BORDER}">✗ {label}</span>'
-                        return out
-
-                    sum_sections = [
-                        (f"🎯 Problem type", f'<span style="color:{ACCENT1};font-weight:700">{st.session_state.nb_ptype.title()}</span>'),
-                        ("🧬 EDA charts",    chips_html(eda,   eda_labels,   "green")),
-                        ("🧹 Preprocessing", chips_html(pre,   pre_labels,   "blue")),
-                        ("🏆 Result charts", chips_html(train, train_labels, "green")),
-                        ("💾 Export",        chips_html(expt,  exp_labels,   "blue")),
-                    ]
-
-                    for section_title, content in sum_sections:
-                        st.markdown(f"""
-                        <div style="margin-bottom:.75rem">
-                          <div style="font-size:.72rem;font-weight:800;color:{TEXT3};text-transform:uppercase;letter-spacing:.06em;margin-bottom:.3rem">{section_title}</div>
-                          <div>{content}</div>
-                        </div>""", unsafe_allow_html=True)
 
                     st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-                    # ── Back + Generate buttons ──
-                    nb5c1, nb5c2 = st.columns([1, 4])
-                    with nb5c1:
-                        if st.button("← Back", key="nb_back5"):
-                            st.session_state.nb_step = 4; st.rerun()
+                    if st.session_state.results is not None:
+                        res_nb = st.session_state.results
+                        mc_nb  = "Model" if "Model" in res_nb.columns else res_nb.columns[0]
+                        nr_nb  = res_nb.select_dtypes(include=[np.number]).columns.tolist()
+                        bn_nb  = res_nb.iloc[0][mc_nb]
+                        mn_nb  = nr_nb[0] if nr_nb else "Score"
+                        ts_nb  = res_nb.iloc[0][mn_nb] if nr_nb else 0
 
-                    with nb5c2:
-                        # Check if training has been done
-                        if st.session_state.results is not None:
-                            try:
-                                res_nb = st.session_state.results
-                                mc_nb  = "Model" if "Model" in res_nb.columns else res_nb.columns[0]
-                                nr_nb  = res_nb.select_dtypes(include=[np.number]).columns.tolist()
-                                bn_nb  = res_nb.iloc[0][mc_nb]
-                                mn_nb  = nr_nb[0] if nr_nb else "Score"
-                                ts_nb  = res_nb.iloc[0][mn_nb] if nr_nb else 0
+                        # Generate notebook bytes
+                        try:
+                            target_for_nb = df.columns[0]
+                            if st.session_state.problem_type:
+                                # Use previously selected target if available
+                                pass
+                            nb_bytes = generate_notebook(
+                                df=df, target_col=df.columns[0],
+                                problem_type=st.session_state.nb_ptype,
+                                results_df=res_nb, best_model_name=bn_nb,
+                                top_score=ts_nb, metric_name=mn_nb,
+                                dataset_name=str(st.session_state.dataset_name or "dataset"),
+                                training_time=st.session_state.training_time or 0,
+                                fold=st.session_state.cv_fold or 5,
+                                normalize=st.session_state.nb_pre.get("normalize", True),
+                                train_size=0.8,
+                                eda_selections=st.session_state.nb_eda,
+                                pre_selections=st.session_state.nb_pre,
+                                train_selections=st.session_state.nb_train,
+                                export_selections=st.session_state.nb_export,
+                                author_name=st.session_state.author_name,
+                                author_title=st.session_state.author_title,
+                                author_quote=st.session_state.author_quote,
+                                author_email=st.session_state.author_email,
+                                author_linkedin=st.session_state.author_linkedin,
+                                author_github=st.session_state.author_github,
+                                author_kaggle=st.session_state.author_kaggle,
+                                author_facebook=st.session_state.author_facebook,
+                            )
+                            st.session_state.nb_last_bytes = nb_bytes
+                            safe_nm = str(st.session_state.dataset_name or "dataset").replace(" ","_").replace(".","_")
+                            nb_filename = f"dataforge_{safe_nm}_{bn_nb.replace(' ','_')}.ipynb"
+                            st.session_state.nb_last_filename = nb_filename
 
-                                nb_bytes = generate_notebook(
-                                    df              = df,
-                                    target_col      = st.session_state.get("nb_target", df.columns[0]),
-                                    problem_type    = st.session_state.nb_ptype,
-                                    results_df      = res_nb,
-                                    best_model_name = bn_nb,
-                                    top_score       = ts_nb,
-                                    metric_name     = mn_nb,
-                                    dataset_name    = str(st.session_state.dataset_name or "dataset"),
-                                    training_time   = st.session_state.training_time or 0,
-                                    fold            = st.session_state.cv_fold or 5,
-                                    normalize       = pre.get("normalize", True),
-                                    train_size      = 0.8,
-                                    eda_selections  = st.session_state.nb_eda,
-                                    pre_selections  = st.session_state.nb_pre,
-                                    train_selections= st.session_state.nb_train,
-                                    export_selections=st.session_state.nb_export,
-                                )
-                                safe_nm = str(st.session_state.dataset_name or "dataset").replace(" ","_").replace(".","_")
+                            # ── DOWNLOAD BUTTON ──
+                            nb6c1, nb6c2 = st.columns([1, 4])
+                            with nb6c1:
+                                if st.button("← Back", key="nb_back6"): st.session_state.nb_step = 5; st.rerun()
+                            with nb6c2:
                                 st.download_button(
-                                    label     = "📓 Generate & Download Notebook (.ipynb)",
-                                    data      = nb_bytes,
-                                    file_name = f"dataforge_{safe_nm}_{bn_nb.replace(' ','_')}.ipynb",
-                                    mime      = "application/x-ipynb+json",
-                                    key       = "nb_builder_download"
+                                    label="📓 Download Notebook (.ipynb)",
+                                    data=nb_bytes,
+                                    file_name=nb_filename,
+                                    mime="application/x-ipynb+json",
+                                    key="nb_builder_download"
                                 )
-                                st.success("✅ Notebook ready! Click button to download.")
-                            except Exception as nb_err:
-                                st.error(f"❌ Error: {nb_err}")
-                        else:
-                            st.warning("⚠️ Pehle **Train Model** tab mein training complete karo — phir notebook generate hogi!")
-                            st.info("💡 Training ke baad yahan wapas aao aur **Generate** button click karo.")
+                            st.success("✅ Notebook ready! Download karo ya seedha Kaggle pe upload karo.")
+
+                            # ── KAGGLE UPLOAD SECTION ──
+                            st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+                            st.markdown(f"""
+                            <div style="background:{"rgba(32,163,220,0.08)" if T=="dark" else "rgba(32,163,220,0.06)"};
+                                        border:2px solid {"rgba(32,163,220,0.35)" if T=="dark" else "rgba(32,163,220,0.40)"};
+                                        border-radius:16px;padding:1.5rem;margin-top:.5rem">
+                              <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem">
+                                <span style="font-size:1.8rem">🧠</span>
+                                <div>
+                                  <div style="font-size:1rem;font-weight:800;color:{"#20a3dc" if T=="dark" else "#006b8e"}">Upload Directly to Kaggle</div>
+                                  <div style="font-size:.78rem;color:{TEXT3}">Apni Kaggle credentials enter karo — notebook seedha tumhari profile pe upload ho jayegi</div>
+                                </div>
+                              </div>
+                            """, unsafe_allow_html=True)
+
+                            kg1, kg2 = st.columns(2)
+                            with kg1:
+                                st.session_state.kaggle_username = st.text_input(
+                                    "👤 Kaggle Username",
+                                    value=st.session_state.kaggle_username,
+                                    placeholder="e.g. muhammadshayan5839",
+                                    key="kg_user"
+                                )
+                            with kg2:
+                                st.session_state.kaggle_key = st.text_input(
+                                    "🔑 Kaggle API Key",
+                                    value=st.session_state.kaggle_key,
+                                    placeholder="Paste your API key here",
+                                    type="password",
+                                    key="kg_key"
+                                )
+
+                            notebook_title_input = st.text_input(
+                                "📝 Notebook Title on Kaggle",
+                                value=f"DataForge AutoML — {str(st.session_state.dataset_name or 'Dataset')}",
+                                key="kg_title"
+                            )
+
+                            st.markdown(f"""
+                              <div style="font-size:.72rem;color:{TEXT3};margin:.4rem 0 .75rem;padding:.5rem .75rem;background:{"rgba(251,191,36,0.08)" if T=="dark" else "rgba(251,191,36,0.12)"};border-radius:8px;border-left:3px solid {ACCENTY}">
+                                💡 <b>API Key kahan se milega?</b> Kaggle → Settings → API → "Create New Token" → kaggle.json mein hoga
+                              </div>
+                            """, unsafe_allow_html=True)
+                            st.markdown("</div>", unsafe_allow_html=True)
+
+                            if st.button("🚀 Upload to Kaggle", key="kaggle_upload_btn"):
+                                if not st.session_state.kaggle_username.strip():
+                                    st.error("❌ Kaggle username enter karo!")
+                                elif not st.session_state.kaggle_key.strip():
+                                    st.error("❌ Kaggle API key enter karo!")
+                                else:
+                                    with st.spinner("🔄 Kaggle pe upload ho raha hai..."):
+                                        success, message, kaggle_url = upload_notebook_to_kaggle(
+                                            nb_bytes=nb_bytes,
+                                            notebook_title=notebook_title_input,
+                                            dataset_name=str(st.session_state.dataset_name or "dataset"),
+                                            kaggle_username=st.session_state.kaggle_username.strip(),
+                                            kaggle_key=st.session_state.kaggle_key.strip(),
+                                        )
+
+                                    if success:
+                                        st.markdown(f"""
+                                        <div class="kaggle-success">
+                                          <div style="font-size:1.1rem;font-weight:800;color:{ACCENT1};margin-bottom:.5rem">🎉 Notebook Kaggle pe Upload Ho Gaya!</div>
+                                          <div style="font-size:.875rem;color:{TEXT2};margin-bottom:.75rem">{message}</div>
+                                          <a href="{kaggle_url}" target="_blank"
+                                             style="display:inline-flex;align-items:center;gap:.5rem;
+                                                    background:linear-gradient(135deg,rgba(32,163,220,0.2),rgba(32,163,220,0.1));
+                                                    border:2px solid rgba(32,163,220,0.5);
+                                                    color:#20a3dc;padding:.65rem 1.25rem;border-radius:10px;
+                                                    text-decoration:none;font-weight:700;font-size:.9rem;">
+                                            🧠 Kaggle pe Dekho →
+                                          </a>
+                                          <div style="font-size:.72rem;color:{TEXT3};margin-top:.6rem;">
+                                            ⚠️ Kaggle notebooks public hone mein 1-2 minute lag sakte hain
+                                          </div>
+                                        </div>
+                                        """, unsafe_allow_html=True)
+                                    else:
+                                        st.error(message)
+                                        st.info("💡 Agar error aa raha hai toh manually download kar ke Kaggle pe upload karo.")
+
+                        except Exception as nb_err:
+                            st.error(f"❌ Notebook generation failed: {nb_err}")
+                    else:
+                        nb6c1b, nb6c2b = st.columns([1, 4])
+                        with nb6c1b:
+                            if st.button("← Back", key="nb_back6b"): st.session_state.nb_step = 5; st.rerun()
+                        st.warning("⚠️ Pehle **Train Model** tab mein training complete karo — phir notebook generate hogi!")
+                        st.info("💡 Training ke baad yahan wapas aao aur notebook generate + Kaggle pe upload karo.")
 
                 else:
-                    st.markdown(f'<div class="nb-step-title-idle">Model export & generate</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="nb-step-title-idle">💾 Export & Kaggle Upload</div>', unsafe_allow_html=True)
 
 else:
     # ── WELCOME SCREEN ──
@@ -1695,12 +2016,11 @@ else:
             </div>""", unsafe_allow_html=True)
 
     st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-
     st.markdown(f"""
     <div style="background:{"rgba(74,222,128,0.06)" if T=="dark" else "rgba(124,58,237,0.06)"};border:2px solid {"rgba(74,222,128,0.25)" if T=="dark" else "rgba(124,58,237,0.25)"};border-radius:20px;padding:2rem;text-align:center;margin-bottom:2rem">
       <div style="font-size:1.4rem;font-weight:900;background:{HERO_H1_GRAD};-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:1rem">🎁 Everything Free. No Login. No Limits.</div>
       <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:.75rem">
-        {"".join(f'<span class="insight-chip" style="border-color:{ACCENT1};color:{ACCENT1}">{f}</span>' for f in ["✅ XGBoost","✅ LightGBM","✅ CatBoost","✅ 10-fold CV","✅ Model Export (.pkl)","✅ Notebook Export (.ipynb)","✅ 13+ Algorithms","✅ No Sign-up Required"])}
+        {"".join(f'<span class="insight-chip" style="border-color:{ACCENT1};color:{ACCENT1}">{f}</span>' for f in ["✅ XGBoost","✅ LightGBM","✅ CatBoost","✅ 10-fold CV","✅ Model Export (.pkl)","✅ Notebook Export (.ipynb)","✅ Kaggle Direct Upload","✅ 13+ Algorithms","✅ No Sign-up Required"])}
       </div>
     </div>
     <div style="text-align:center;color:{TEXT3};font-size:.82rem;padding-bottom:1.5rem">
