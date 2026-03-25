@@ -672,100 +672,66 @@ print("✅ Loaded:", type(loaded_model))
 def upload_notebook_to_kaggle(nb_bytes, notebook_title, dataset_name,
                                kaggle_username, kaggle_key):
     """
-    Kaggle API ke zariye notebook upload karta hai.
+    Upload notebook to Kaggle via official Kaggle Kernels API v1.
     Returns: (success: bool, message: str, url: str)
     """
     try:
-        # Notebook slug — lowercase, spaces to dashes
+        # Build slug: lowercase alphanumeric + hyphens, max 50 chars
         slug = notebook_title.lower().replace(" ", "-").replace("_", "-")
-        slug = "".join(c for c in slug if c.isalnum() or c == "-")[:50]
+        slug = "".join(c for c in slug if c.isalnum() or c == "-")[:50].strip("-")
+        if not slug:
+            slug = "dataforge-notebook"
 
-        # Write notebook to temp file
-        with tempfile.TemporaryDirectory() as tmpdir:
-            nb_path = os.path.join(tmpdir, "notebook.ipynb")
-            with open(nb_path, "wb") as f:
-                f.write(nb_bytes)
+        # Decode notebook content to string
+        nb_content = nb_bytes.decode("utf-8")
 
-            # kernel-metadata.json
-            metadata = {
-                "id": f"{kaggle_username}/{slug}",
-                "title": notebook_title,
-                "code_file": "notebook.ipynb",
-                "language": "python",
-                "kernel_type": "notebook",
-                "is_private": False,
-                "enable_gpu": False,
-                "enable_internet": True,
-                "dataset_sources": [],
-                "competition_sources": [],
-                "kernel_sources": []
-            }
-            meta_path = os.path.join(tmpdir, "kernel-metadata.json")
-            with open(meta_path, "w") as f:
-                _json.dump(metadata, f)
-
-            # Create zip
-            zip_path = os.path.join(tmpdir, "kernel.zip")
-            with zipfile.ZipFile(zip_path, "w") as zf:
-                zf.write(nb_path, "notebook.ipynb")
-                zf.write(meta_path, "kernel-metadata.json")
-
-            with open(zip_path, "rb") as zf:
-                zip_data = zf.read()
-
-        # Kaggle API call
+        # Basic auth header
         auth = base64.b64encode(f"{kaggle_username}:{kaggle_key}".encode()).decode()
-        headers = {
-            "Authorization": f"Basic {auth}",
-            "Content-Type": "application/zip",
-        }
 
-        # Try push endpoint
-        params = {
+        # Kaggle Kernels Push API — correct payload format
+        payload = {
+            "currentRunningVersion": 1,
             "id": f"{kaggle_username}/{slug}",
             "title": notebook_title,
             "language": "python",
             "kernelType": "notebook",
-            "isPrivate": False,
+            "isPrivate": True,
+            "enableGpu": False,
+            "enableTpu": False,
+            "enableInternet": True,
+            "datasetDataSources": [],
+            "kernelDataSources": [],
+            "competitionDataSources": [],
+            "categoryIds": [],
+            "dockerImagePinningType": "original",
+            "sourceType": "EDITOR_NOTEBOOK",
+            "source": nb_content,        # ← notebook JSON string goes here
         }
 
         resp = requests.post(
             "https://www.kaggle.com/api/v1/kernels/push",
-            headers={"Authorization": f"Basic {auth}"},
-            json={
-                "currentRunningVersion": 1,
-                "id": f"{kaggle_username}/{slug}",
-                "title": notebook_title,
-                "language": "python",
-                "kernelType": "notebook",
-                "isPrivate": False,
-                "enableGpu": False,
-                "enableInternet": True,
-                "datasetDataSources": [],
-                "kernelDataSources": [],
-                "competitionDataSources": [],
-                "categoryIds": [],
-                "dockerImagePinningType": "original",
-                "sourceType": "EDITOR_NOTEBOOK"
+            headers={
+                "Authorization": f"Basic {auth}",
+                "Content-Type": "application/json",
             },
-            timeout=30
+            json=payload,
+            timeout=45,
         )
 
         if resp.status_code in [200, 201]:
             kaggle_url = f"https://www.kaggle.com/{kaggle_username}/{slug}"
-            return True, "✅ Notebook successfully uploaded to Kaggle!", kaggle_url
+            return True, "Notebook uploaded successfully!", kaggle_url
         else:
-            # Parse error
             try:
-                err_detail = resp.json().get("message", resp.text[:200])
+                err_detail = resp.json().get("message", resp.text[:300])
             except Exception:
-                err_detail = resp.text[:200]
-            return False, f"❌ Kaggle API Error ({resp.status_code}): {err_detail}", ""
+                err_detail = resp.text[:300]
+            return False, f"Kaggle API Error ({resp.status_code}): {err_detail}", ""
 
     except requests.exceptions.ConnectionError:
-        return False, "❌ Network error — internet connection check karo.", ""
+        return False, "Network error — please check your internet connection.", ""
     except Exception as e:
-        return False, f"❌ Upload failed: {str(e)}", ""
+        return False, f"Upload failed: {str(e)}", ""
 
 
 # ─────────────────────────────────────────────
@@ -826,7 +792,7 @@ def drop_rare_classes(df, target_col, min_count=2):
             warn = (
                 f"\u26a0\ufe0f **{len(rare)} rare class(es) removed** (less than {min_count} samples): "
                 f"`{'`, `'.join([str(r) for r in rare[:5]])}`. "
-                f"Cross-validation ke liye minimum {min_count} samples per class zaroori hain."
+                f"Cross-validation requires minimum {min_count} samples per class."
             )
             return df_clean, warn
     except Exception:
@@ -851,13 +817,13 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
         warnings_list.append(f"\u26a0\ufe0f Dataset {original_rows:,} rows — auto-sampled to **{MAX_ROWS_TRAINING:,} rows**.")
     elif original_rows > MAX_ROWS_WARNING:
         df_train = df.copy()
-        warnings_list.append(f"\U0001f4a1 Dataset {original_rows:,} rows — training chalegi lekin agar crash ho toh {MAX_ROWS_WARNING:,} rows tak chota karo.")
+        warnings_list.append(f"\U0001f4a1 Dataset has {original_rows:,} rows — training will proceed but if it crashes, reduce to {MAX_ROWS_WARNING:,} rows.")
     else:
         df_train = df.copy()
 
     safe_fold = safe_fold_count(df_train, target_col, fold, problem_type)
     if safe_fold != fold:
-        warnings_list.append(f"\u26a0\ufe0f **CV Folds {fold} se {safe_fold} reduce** — kuch classes mein kam samples hain.")
+        warnings_list.append(f"\u26a0\ufe0f **CV Folds reduced from {fold} to {safe_fold}** — some classes have insufficient samples.")
 
     include_models = ALL_CLF_MODELS if problem_type == "classification" else ALL_REG_MODELS
     if max_models and max_models < len(include_models):
@@ -886,11 +852,11 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
     except Exception as e:
         err = str(e).lower()
         if "memory" in err or "killed" in err:
-            raise MemoryError(f"Setup mein memory khatam — dataset {MAX_ROWS_WARNING:,} rows se kam karo.")
+            raise MemoryError(f"Out of memory during setup — reduce dataset to under {MAX_ROWS_WARNING:,} rows.")
         if "least populated" in err or "stratif" in err or "minimum number of groups" in err:
             raise ValueError(
                 "Cross-validation error: Kuch target classes mein bohot kam samples hain.\n\n"
-                "Solutions:\n- CV Folds slider ko 2 par set karo\n- Un rows ko dataset se hata do\n- Ya ek alag target column choose karo"
+                "Solutions:\n- Set CV Folds slider to 2\n- Remove rows with rare target values\n- Choose a different target column"
             )
         raise
 
@@ -902,13 +868,13 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
     except MemoryError:
         force_gc()
         light = ["lr","dt","ridge"]
-        warnings_list.append("⚠️ Memory issue — sirf 3 lightest models se try kar raha hoon.")
+        warnings_list.append("⚠️ Memory issue — retrying with 3 lightest models only.")
         best = cmp_fn(verbose=False, n_select=1, include=light)
         results = pull_fn()
     except Exception as e:
         err = str(e).lower()
         if any(k in err for k in ["memory","killed","oom","cannot allocate"]):
-            raise MemoryError("Model comparison mein memory khatam — dataset chota karo.")
+            raise MemoryError("Out of memory during model comparison — please reduce dataset size.")
         raise
 
     try:
@@ -1372,7 +1338,7 @@ if st.session_state.data is not None:
             if len(df) > MAX_ROWS_TRAINING:
                 st.error(f"🚨 **Dataset {len(df):,} rows** — too large for free hosting. Training will auto-sample **{MAX_ROWS_TRAINING:,} rows** (stratified).")
             elif len(df) > MAX_ROWS_WARNING:
-                st.warning(f"⚠️ **{len(df):,} rows** — thoda bada hai. Training chalegi lekin agar crash ho toh {MAX_ROWS_WARNING:,} rows tak chota karo.")
+                st.warning(f"⚠️ **{len(df):,} rows** — training will proceed but if it crashes, reduce to {MAX_ROWS_WARNING:,} rows.")
 
             available_models = ALL_CLF_MODELS if ptype == "classification" else ALL_REG_MODELS
 
@@ -1673,7 +1639,7 @@ if st.session_state.data is not None:
 
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">📓</div><h3>Notebook Builder</h3></div>
         <div style="font-size:.85rem;color:{TEXT2};margin-bottom:1.5rem">
-          Step-by-step configure karo — styled HTML markdown + Kaggle upload support included!
+          Step-by-step configure your notebook — styled HTML markdown sections + Kaggle upload included!
         </div>""", unsafe_allow_html=True)
 
         def dot(n):
@@ -1692,7 +1658,7 @@ if st.session_state.data is not None:
                 st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(1)}{line(1)}</div>', unsafe_allow_html=True)
             with col_body:
                 if step >= 1:
-                    st.markdown(f'<div class="nb-step-title">Problem type select karo</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="nb-step-title">Select problem type</div>', unsafe_allow_html=True)
                     ptype_options = ["Classification", "Regression"]
                     current_ptype = "Classification" if st.session_state.nb_ptype == "classification" else "Regression"
                     chosen = st.radio("Problem type", ptype_options, index=ptype_options.index(current_ptype),
@@ -1702,7 +1668,7 @@ if st.session_state.data is not None:
                         if st.button("Continue →", key="nb_next1"):
                             st.session_state.nb_step = 2; st.rerun()
                 else:
-                    st.markdown(f'<div class="nb-step-title-idle">Problem type select karo</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="nb-step-title-idle">Select problem type</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 
@@ -1713,7 +1679,7 @@ if st.session_state.data is not None:
                 st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(2)}{line(2)}</div>', unsafe_allow_html=True)
             with col_body:
                 if step >= 2:
-                    st.markdown(f'<div class="nb-step-title">EDA — charts select karo</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="nb-step-title">EDA — Select charts to include</div>', unsafe_allow_html=True)
                     eda = st.session_state.nb_eda
                     ec1, ec2 = st.columns(2)
                     with ec1:
@@ -1736,7 +1702,7 @@ if st.session_state.data is not None:
                         with nb2c2:
                             if st.button("Continue →", key="nb_next2"): st.session_state.nb_step = 3; st.rerun()
                 else:
-                    st.markdown(f'<div class="nb-step-title-idle">EDA — charts select karo</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="nb-step-title-idle">EDA — Select charts to include</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 
@@ -1798,7 +1764,7 @@ if st.session_state.data is not None:
             with col_body:
                 if step >= 5:
                     st.markdown(f'<div class="nb-step-title">🧑‍💻 About the Author (optional)</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin:.4rem 0 .75rem">Notebook ke end mein styled author section add hoga. Sab optional hai — jo fill karo woh show hoga.</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="font-size:.8rem;color:{TEXT2};margin:.4rem 0 .75rem">These details appear in the "About the Developer" section at the end of the notebook. All fields are optional — only filled fields will be shown.</div>', unsafe_allow_html=True)
 
                     a1, a2 = st.columns(2)
                     with a1:
@@ -1894,7 +1860,7 @@ if st.session_state.data is not None:
                                     mime="application/x-ipynb+json",
                                     key="nb_builder_download"
                                 )
-                            st.success("✅ Notebook ready! Download karo ya seedha Kaggle pe upload karo.")
+                            st.success("✅ Notebook ready! Download it or upload directly to Kaggle.")
 
                             # ── KAGGLE UPLOAD SECTION ──
                             st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
@@ -1906,7 +1872,7 @@ if st.session_state.data is not None:
                                 <span style="font-size:1.8rem">🧠</span>
                                 <div>
                                   <div style="font-size:1rem;font-weight:800;color:{"#20a3dc" if T=="dark" else "#006b8e"}">Upload Directly to Kaggle</div>
-                                  <div style="font-size:.78rem;color:{TEXT3}">Apni Kaggle credentials enter karo — notebook seedha tumhari profile pe upload ho jayegi</div>
+                                  <div style="font-size:.78rem;color:{TEXT3}">Enter your Kaggle credentials — notebook will be uploaded directly to your profile</div>
                                 </div>
                               </div>
                             """, unsafe_allow_html=True)
@@ -1936,18 +1902,18 @@ if st.session_state.data is not None:
 
                             st.markdown(f"""
                               <div style="font-size:.72rem;color:{TEXT3};margin:.4rem 0 .75rem;padding:.5rem .75rem;background:{"rgba(251,191,36,0.08)" if T=="dark" else "rgba(251,191,36,0.12)"};border-radius:8px;border-left:3px solid {ACCENTY}">
-                                💡 <b>API Key kahan se milega?</b> Kaggle → Settings → API → "Create New Token" → kaggle.json mein hoga
+                                💡 <b>Where to find your API Key?</b> Kaggle → Settings → API → "Create New Token" → download kaggle.json
                               </div>
                             """, unsafe_allow_html=True)
                             st.markdown("</div>", unsafe_allow_html=True)
 
                             if st.button("🚀 Upload to Kaggle", key="kaggle_upload_btn"):
                                 if not st.session_state.kaggle_username.strip():
-                                    st.error("❌ Kaggle username enter karo!")
+                                    st.error("❌ Please enter your Kaggle username!")
                                 elif not st.session_state.kaggle_key.strip():
-                                    st.error("❌ Kaggle API key enter karo!")
+                                    st.error("❌ Please enter your Kaggle API key!")
                                 else:
-                                    with st.spinner("🔄 Kaggle pe upload ho raha hai..."):
+                                    with st.spinner("🔄 Uploading to Kaggle..."):
                                         success, message, kaggle_url = upload_notebook_to_kaggle(
                                             nb_bytes=nb_bytes,
                                             notebook_title=notebook_title_input,
@@ -1959,7 +1925,7 @@ if st.session_state.data is not None:
                                     if success:
                                         st.markdown(f"""
                                         <div class="kaggle-success">
-                                          <div style="font-size:1.1rem;font-weight:800;color:{ACCENT1};margin-bottom:.5rem">🎉 Notebook Kaggle pe Upload Ho Gaya!</div>
+                                          <div style="font-size:1.1rem;font-weight:800;color:{ACCENT1};margin-bottom:.5rem">🎉 Notebook Successfully Uploaded to Kaggle!</div>
                                           <div style="font-size:.875rem;color:{TEXT2};margin-bottom:.75rem">{message}</div>
                                           <a href="{kaggle_url}" target="_blank"
                                              style="display:inline-flex;align-items:center;gap:.5rem;
@@ -1967,16 +1933,16 @@ if st.session_state.data is not None:
                                                     border:2px solid rgba(32,163,220,0.5);
                                                     color:#20a3dc;padding:.65rem 1.25rem;border-radius:10px;
                                                     text-decoration:none;font-weight:700;font-size:.9rem;">
-                                            🧠 Kaggle pe Dekho →
+                                            🧠 View on Kaggle →
                                           </a>
                                           <div style="font-size:.72rem;color:{TEXT3};margin-top:.6rem;">
-                                            ⚠️ Kaggle notebooks public hone mein 1-2 minute lag sakte hain
+                                            ⚠️ Kaggle notebooks may take 1-2 minutes to become publicly visible
                                           </div>
                                         </div>
                                         """, unsafe_allow_html=True)
                                     else:
                                         st.error(message)
-                                        st.info("💡 Agar error aa raha hai toh manually download kar ke Kaggle pe upload karo.")
+                                        st.info("💡 If upload fails, download the notebook and upload it manually to Kaggle.")
 
                         except Exception as nb_err:
                             st.error(f"❌ Notebook generation failed: {nb_err}")
@@ -1984,8 +1950,8 @@ if st.session_state.data is not None:
                         nb6c1b, nb6c2b = st.columns([1, 4])
                         with nb6c1b:
                             if st.button("← Back", key="nb_back6b"): st.session_state.nb_step = 5; st.rerun()
-                        st.warning("⚠️ Pehle **Train Model** tab mein training complete karo — phir notebook generate hogi!")
-                        st.info("💡 Training ke baad yahan wapas aao aur notebook generate + Kaggle pe upload karo.")
+                        st.warning("⚠️ Please complete training in the **Train Model** tab first — then come back to generate your notebook!")
+                        st.info("💡 After training, return here to generate and upload your notebook to Kaggle.")
 
                 else:
                     st.markdown(f'<div class="nb-step-title-idle">💾 Export & Kaggle Upload</div>', unsafe_allow_html=True)
