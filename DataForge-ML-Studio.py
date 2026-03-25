@@ -742,7 +742,7 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
         if rare_warn:
             warnings_list.append(rare_warn)
         if len(df) < 10:
-            raise ValueError("Dataset mein bahut kam samples hain. Target column sahi select kiya hai?")
+            raise ValueError("There are very few samples in the dataset. Have you selected the correct target column?")
 
     original_rows = len(df)
     if original_rows > MAX_ROWS_TRAINING:
