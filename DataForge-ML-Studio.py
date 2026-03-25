@@ -2083,7 +2083,7 @@ if st.session_state.data is not None:
     const feedback   = feedTxt.value.trim() || "No feedback provided.";
     const now        = new Date().toLocaleString("en-PK", {{timeZone:"Asia/Karachi"}});
 
-    emailjs.send("service_7gw3npx", "template_i2fgsga", {{
+    emailjs.send("service_7gw3npx", "template_qlievo7", {{
       to_email:    "shayan.corner@gmail.com",
       from_name:   "{_au}",
       rating:      selected + " / 5  " + starEmojis,
