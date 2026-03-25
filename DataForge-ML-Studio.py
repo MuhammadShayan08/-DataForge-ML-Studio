@@ -961,14 +961,6 @@ div[data-testid="column"]:nth-child(3) .stButton>button:hover{{border-color:{ACC
 .stAlert{{border-radius:12px !important;border-left-width:4px !important;background:{CARD_BG} !important;}}
 @keyframes slideUp{{from{{opacity:0;transform:translateY(18px)}}to{{opacity:1;transform:none}}}}
 .slide-up{{animation:slideUp .45s ease-out both;}}
-.rating-card{{background:{CARD_BG};border:1px solid {BORDER};border-radius:20px;padding:1.75rem 2rem;margin-top:1.25rem;position:relative;overflow:hidden;}}
-.rating-card::before{{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#667eea,#f093fb,#4ade80);}}
-.star-row{{display:flex;gap:8px;justify-content:center;margin:.75rem 0;}}
-.star-btn{{font-size:2.2rem;background:none;border:none;cursor:pointer;transition:transform .15s ease,filter .15s ease;line-height:1;padding:4px;}}
-.star-btn:hover{{transform:scale(1.25);filter:drop-shadow(0 0 8px #fbbf24);}}
-.star-btn.active{{transform:scale(1.15);filter:drop-shadow(0 0 6px #fbbf24);}}
-.rating-submitted{{background:linear-gradient(135deg,rgba(74,222,128,0.10),rgba(96,165,250,0.06));border:2px solid rgba(74,222,128,0.35);border-radius:16px;padding:1.5rem;text-align:center;margin-top:1rem;}}
-@keyframes starPop{{0%{{transform:scale(1)}}40%{{transform:scale(1.4)}}70%{{transform:scale(.9)}}100%{{transform:scale(1.15)}}}}
 
 </style>
 """, unsafe_allow_html=True)
@@ -1805,86 +1797,345 @@ if st.session_state.data is not None:
                             # ── STAR RATING SECTION ──
                             st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-                            if st.session_state.rating_submitted:
-                                # ── THANK YOU STATE ──
-                                stars_display = "⭐" * st.session_state.rating_stars + "☆" * (5 - st.session_state.rating_stars)
-                                st.markdown(f"""
-                                <div class="rating-submitted">
-                                  <div style="font-size:2.5rem;margin-bottom:.5rem">{stars_display}</div>
-                                  <div style="font-size:1.1rem;font-weight:800;color:{ACCENT1};margin-bottom:.25rem">
-                                    {"🎉 Amazing! Thank you so much!" if st.session_state.rating_stars == 5
-                                     else "😊 Thanks for your feedback!" if st.session_state.rating_stars >= 3
-                                     else "🙏 Thanks — we'll keep improving!"}
-                                  </div>
-                                  <div style="font-size:.82rem;color:{TEXT3}">Your rating: {st.session_state.rating_stars}/5 stars</div>
-                                  {"" if not st.session_state.rating_feedback else f'<div style="font-size:.8rem;color:{TEXT2};margin-top:.5rem;font-style:italic;">"{st.session_state.rating_feedback}"</div>'}
-                                </div>
-                                """, unsafe_allow_html=True)
+                            _ds  = str(st.session_state.dataset_name or "Unknown Dataset")
+                            _bm  = str(bn_nb)
+                            _sc  = f"{ts_nb:.4f}"
+                            _pt  = str(st.session_state.nb_ptype or "")
+                            _au  = str(st.session_state.author_name or "Anonymous")
 
-                                if st.button("✏️ Update Rating", key="rating_reset"):
-                                    st.session_state.rating_submitted = False
-                                    st.rerun()
+                            st.components.v1.html(f"""
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
+  *{{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}}
+  body{{background:transparent;}}
 
-                            else:
-                                # ── RATING INPUT STATE ──
-                                st.markdown(f"""
-                                <div class="rating-card slide-up">
-                                  <div style="text-align:center;margin-bottom:.5rem">
-                                    <div style="font-size:1rem;font-weight:800;color:{TEXT1};letter-spacing:.02em">
-                                      ⭐ Rate Your Experience
-                                    </div>
-                                    <div style="font-size:.78rem;color:{TEXT3};margin-top:.3rem">
-                                      How was your DataForge ML Studio experience?
-                                    </div>
-                                  </div>
-                                </div>
-                                """, unsafe_allow_html=True)
+  .rc{{
+    background:{"#0d0d0d" if T=="dark" else "#ffffff"};
+    border:1px solid {"#222" if T=="dark" else "#e5e7eb"};
+    border-radius:20px;
+    padding:2rem;
+    position:relative;
+    overflow:hidden;
+    margin-top:4px;
+  }}
+  .rc::before{{
+    content:'';position:absolute;top:0;left:0;right:0;height:3px;
+    background:linear-gradient(90deg,#667eea,#f093fb,#4ade80,#60a5fa);
+    background-size:300% 100%;
+    animation:shimmer 3s linear infinite;
+  }}
+  @keyframes shimmer{{0%{{background-position:0% 0%}}100%{{background-position:300% 0%}}}}
 
-                                # Star buttons row
-                                star_labels = {1:"😞 Poor", 2:"😕 Fair", 3:"😊 Good", 4:"😄 Great", 5:"🤩 Excellent!"}
-                                r1, r2, r3, r4, r5 = st.columns(5)
-                                for col, val in zip([r1,r2,r3,r4,r5], [1,2,3,4,5]):
-                                    with col:
-                                        is_active = st.session_state.rating_stars >= val
-                                        star_icon = "⭐" if is_active else "☆"
-                                        if st.button(
-                                            star_icon,
-                                            key=f"star_{val}",
-                                            help=star_labels[val],
-                                            use_container_width=True
-                                        ):
-                                            st.session_state.rating_stars = val
-                                            st.rerun()
+  .rc-title{{
+    text-align:center;
+    font-size:1.1rem;
+    font-weight:800;
+    color:{"#f9fafb" if T=="dark" else "#111827"};
+    margin-bottom:.3rem;
+    letter-spacing:.01em;
+  }}
+  .rc-sub{{
+    text-align:center;
+    font-size:.78rem;
+    color:{"#6b7280" if T=="dark" else "#9ca3af"};
+    margin-bottom:1.25rem;
+  }}
 
-                                # Show selected rating label
-                                if st.session_state.rating_stars > 0:
-                                    st.markdown(f"""
-                                    <div style="text-align:center;margin:.4rem 0 .75rem;font-size:.9rem;font-weight:700;color:{ACCENT1}">
-                                      {star_labels[st.session_state.rating_stars]}
-                                    </div>
-                                    """, unsafe_allow_html=True)
+  /* ── STARS ── */
+  .stars-wrap{{
+    display:flex;
+    justify-content:center;
+    gap:10px;
+    margin-bottom:1rem;
+  }}
+  .star{{
+    font-size:2.6rem;
+    cursor:pointer;
+    color:#d1d5db;
+    transition:transform .2s cubic-bezier(.34,1.56,.64,1), color .15s, filter .2s;
+    user-select:none;
+    line-height:1;
+    display:inline-block;
+  }}
+  .star:hover,
+  .star.hov{{
+    color:#fbbf24;
+    transform:scale(1.3);
+    filter:drop-shadow(0 0 10px #fbbf2488);
+  }}
+  .star.sel{{
+    color:#fbbf24;
+    transform:scale(1.15);
+    filter:drop-shadow(0 0 7px #fbbf2466);
+  }}
+  @keyframes starPop{{
+    0%{{transform:scale(1)}}
+    40%{{transform:scale(1.55) rotate(-8deg)}}
+    70%{{transform:scale(.95) rotate(4deg)}}
+    100%{{transform:scale(1.15)}}
+  }}
+  .star.pop{{animation:starPop .4s cubic-bezier(.34,1.56,.64,1) both;}}
 
-                                    # Optional feedback
-                                    feedback = st.text_area(
-                                        "💬 Share your thoughts (optional)",
-                                        placeholder="What did you like? What can we improve?",
-                                        value=st.session_state.rating_feedback,
-                                        max_chars=300,
-                                        key="rating_feedback_input",
-                                        label_visibility="collapsed",
-                                        height=90,
-                                    )
+  /* ── LABEL ── */
+  .rating-label{{
+    text-align:center;
+    font-size:.95rem;
+    font-weight:700;
+    min-height:1.4rem;
+    margin-bottom:.9rem;
+    transition:opacity .2s;
+    color:#4ade80;
+  }}
 
-                                    sub1, sub2 = st.columns([2, 3])
-                                    with sub1:
-                                        if st.button("🚀 Submit Rating", key="rating_submit", use_container_width=True):
-                                            st.session_state.rating_feedback = feedback
-                                            st.session_state.rating_submitted = True
-                                            st.rerun()
-                                    with sub2:
-                                        st.markdown(f'<div style="font-size:.72rem;color:{TEXT3};padding:.6rem 0">Your feedback helps us improve DataForge! 🙌</div>', unsafe_allow_html=True)
-                                else:
-                                    st.markdown(f'<div style="text-align:center;font-size:.82rem;color:{TEXT3};padding:.5rem 0">👆 Click a star to rate</div>', unsafe_allow_html=True)
+  /* ── TEXTAREA ── */
+  textarea{{
+    width:100%;
+    background:{"#141414" if T=="dark" else "#f9fafb"};
+    border:1px solid {"#2a2a2a" if T=="dark" else "#e5e7eb"};
+    border-radius:12px;
+    color:{"#f9fafb" if T=="dark" else "#111827"};
+    padding:.75rem 1rem;
+    font-size:.85rem;
+    resize:vertical;
+    min-height:80px;
+    outline:none;
+    font-family:'Inter',sans-serif;
+    transition:border-color .2s, box-shadow .2s;
+    margin-bottom:.9rem;
+  }}
+  textarea:focus{{
+    border-color:#667eea;
+    box-shadow:0 0 0 3px rgba(102,126,234,.18);
+  }}
+  textarea::placeholder{{color:{"#4b5563" if T=="dark" else "#9ca3af"};}}
+
+  /* ── SUBMIT BTN ── */
+  .submit-btn{{
+    display:block;
+    width:100%;
+    padding:.85rem;
+    background:linear-gradient(135deg,#667eea,#764ba2);
+    color:#fff;
+    font-size:.95rem;
+    font-weight:700;
+    border:none;
+    border-radius:12px;
+    cursor:pointer;
+    letter-spacing:.03em;
+    box-shadow:0 4px 18px rgba(102,126,234,.40);
+    transition:transform .15s, box-shadow .15s, filter .15s;
+  }}
+  .submit-btn:hover{{
+    transform:translateY(-2px);
+    box-shadow:0 8px 28px rgba(102,126,234,.55);
+    filter:brightness(1.08);
+  }}
+  .submit-btn:active{{transform:translateY(0);}}
+  .submit-btn:disabled{{
+    background:#374151;
+    color:#6b7280;
+    cursor:not-allowed;
+    box-shadow:none;
+    transform:none;
+    filter:none;
+  }}
+
+  /* ── THANK YOU ── */
+  .ty{{
+    text-align:center;
+    padding:1.5rem 1rem;
+    animation:fadeUp .5s ease both;
+  }}
+  @keyframes fadeUp{{from{{opacity:0;transform:translateY(16px)}}to{{opacity:1;transform:none}}}}
+  .ty-stars{{font-size:2.4rem;margin-bottom:.6rem;letter-spacing:4px;}}
+  .ty-msg{{font-size:1.05rem;font-weight:800;color:#4ade80;margin-bottom:.3rem;}}
+  .ty-sub{{font-size:.78rem;color:{"#6b7280" if T=="dark" else "#9ca3af"};}}
+  .ty-quote{{
+    font-size:.82rem;
+    color:{"#9ca3af" if T=="dark" else "#6b7280"};
+    font-style:italic;
+    margin-top:.6rem;
+    padding:.5rem .75rem;
+    background:{"rgba(255,255,255,0.04)" if T=="dark" else "rgba(0,0,0,0.04)"};
+    border-radius:8px;
+    border-left:3px solid #4ade80;
+  }}
+  .reset-btn{{
+    margin-top:1rem;
+    background:none;
+    border:1px solid {"#333" if T=="dark" else "#e5e7eb"};
+    color:{"#9ca3af" if T=="dark" else "#6b7280"};
+    padding:.4rem 1rem;
+    border-radius:8px;
+    font-size:.75rem;
+    cursor:pointer;
+    transition:border-color .2s, color .2s;
+  }}
+  .reset-btn:hover{{border-color:#667eea;color:#667eea;}}
+
+  /* ── STATUS ── */
+  .status{{font-size:.75rem;text-align:center;margin-top:.6rem;min-height:1.1rem;}}
+  .status.ok{{color:#4ade80;}}
+  .status.err{{color:#f87171;}}
+  .status.sending{{color:#60a5fa;}}
+</style>
+</head>
+<body>
+<div class="rc" id="ratingCard">
+
+  <!-- RATING FORM -->
+  <div id="ratingForm">
+    <div class="rc-title">⭐ Rate Your Experience</div>
+    <div class="rc-sub">How was your DataForge ML Studio experience?</div>
+
+    <div class="stars-wrap" id="starsWrap">
+      <span class="star" data-v="1">★</span>
+      <span class="star" data-v="2">★</span>
+      <span class="star" data-v="3">★</span>
+      <span class="star" data-v="4">★</span>
+      <span class="star" data-v="5">★</span>
+    </div>
+
+    <div class="rating-label" id="ratingLabel"></div>
+
+    <textarea id="feedbackTxt" placeholder="Share your thoughts (optional) — what did you like? what can we improve?" style="display:none"></textarea>
+
+    <button class="submit-btn" id="submitBtn" style="display:none" disabled>🚀 Submit Rating</button>
+    <div class="status" id="statusMsg"></div>
+  </div>
+
+  <!-- THANK YOU (hidden initially) -->
+  <div class="ty" id="thankYou" style="display:none">
+    <div class="ty-stars" id="tyStars"></div>
+    <div class="ty-msg" id="tyMsg"></div>
+    <div class="ty-sub" id="tySub"></div>
+    <div class="ty-quote" id="tyQuote" style="display:none"></div>
+    <br>
+    <button class="reset-btn" onclick="resetRating()">✏️ Update Rating</button>
+  </div>
+
+</div>
+
+<script>
+  // ── EmailJS init ──
+  emailjs.init("xqgDMblJbHRCeA0Cq");  // Public Key
+
+  const LABELS = ["", "😞 Poor", "😕 Fair", "😊 Good", "😄 Great", "🤩 Excellent!"];
+  const COLORS = ["","#f87171","#fb923c","#fbbf24","#4ade80","#4ade80"];
+  let selected = 0;
+
+  const stars    = document.querySelectorAll(".star");
+  const label    = document.getElementById("ratingLabel");
+  const feedTxt  = document.getElementById("feedbackTxt");
+  const submitBtn= document.getElementById("submitBtn");
+  const statusMsg= document.getElementById("statusMsg");
+  const form     = document.getElementById("ratingForm");
+  const ty       = document.getElementById("thankYou");
+
+  // ── hover effect ──
+  stars.forEach(s => {{
+    s.addEventListener("mouseenter", () => {{
+      const v = +s.dataset.v;
+      stars.forEach(x => {{
+        const xv = +x.dataset.v;
+        x.classList.toggle("hov", xv <= v);
+      }});
+      label.textContent = LABELS[v];
+      label.style.color = COLORS[v];
+    }});
+    s.addEventListener("mouseleave", () => {{
+      stars.forEach(x => x.classList.remove("hov"));
+      label.textContent = selected ? LABELS[selected] : "";
+      label.style.color = selected ? COLORS[selected] : "";
+    }});
+
+    // ── click ──
+    s.addEventListener("click", () => {{
+      selected = +s.dataset.v;
+      stars.forEach((x, i) => {{
+        x.classList.remove("sel","pop","hov");
+        if (i < selected) {{
+          x.classList.add("sel");
+          setTimeout(() => x.classList.add("pop"), i * 60);
+        }}
+      }});
+      label.textContent = LABELS[selected];
+      label.style.color = COLORS[selected];
+      feedTxt.style.display  = "block";
+      submitBtn.style.display= "block";
+      submitBtn.disabled     = false;
+    }});
+  }});
+
+  // ── submit ──
+  submitBtn.addEventListener("click", () => {{
+    if (!selected) return;
+    submitBtn.disabled = true;
+    submitBtn.textContent = "⏳ Sending...";
+    statusMsg.textContent = "Sending your rating...";
+    statusMsg.className   = "status sending";
+
+    const starEmojis = "⭐".repeat(selected) + "☆".repeat(5 - selected);
+    const feedback   = feedTxt.value.trim() || "No feedback provided.";
+    const now        = new Date().toLocaleString("en-PK", {{timeZone:"Asia/Karachi"}});
+
+    emailjs.send("service_ck7avgg", "template_dataforge_rating", {{
+      to_email:    "shayan.corner@gmail.com",
+      from_name:   "{_au}",
+      rating:      selected + " / 5  " + starEmojis,
+      label:       LABELS[selected],
+      feedback:    feedback,
+      dataset:     "{_ds}",
+      best_model:  "{_bm}",
+      score:       "{_sc}",
+      problem:     "{_pt}",
+      submitted_at: now,
+    }}).then(() => {{
+      statusMsg.textContent = "";
+      showThankYou(feedback);
+    }}, (err) => {{
+      submitBtn.disabled    = false;
+      submitBtn.textContent = "🚀 Submit Rating";
+      statusMsg.textContent = "⚠️ Could not send email — but your rating is saved!";
+      statusMsg.className   = "status err";
+      setTimeout(() => showThankYou(feedback), 1800);
+    }});
+  }});
+
+  function showThankYou(feedback) {{
+    form.style.display = "none";
+    ty.style.display   = "block";
+    const starEmojis = "⭐".repeat(selected) + "☆".repeat(5 - selected);
+    document.getElementById("tyStars").textContent = starEmojis;
+    const msgs = ["","🙏 We'll keep improving!","🙏 We'll keep improving!","😊 Thanks for your feedback!","😄 Thanks a lot!","🎉 You made our day!"];
+    document.getElementById("tyMsg").textContent = msgs[selected];
+    document.getElementById("tySub").textContent = "Your rating: " + selected + "/5 — " + LABELS[selected];
+    if (feedback && feedback !== "No feedback provided.") {{
+      const q = document.getElementById("tyQuote");
+      q.style.display = "block";
+      q.textContent   = '"' + feedback + '"';
+    }}
+  }}
+
+  function resetRating() {{
+    selected = 0;
+    stars.forEach(x => x.classList.remove("sel","pop","hov"));
+    label.textContent      = "";
+    feedTxt.value          = "";
+    feedTxt.style.display  = "none";
+    submitBtn.style.display= "none";
+    statusMsg.textContent  = "";
+    form.style.display     = "block";
+    ty.style.display       = "none";
+  }}
+</script>
+</body>
+</html>
+""", height=380, scrolling=False)
 
                         except Exception as nb_err:
                             st.error(f"❌ Notebook generation failed: {nb_err}")
