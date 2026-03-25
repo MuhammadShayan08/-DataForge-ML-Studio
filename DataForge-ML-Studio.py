@@ -14,7 +14,7 @@ from pycaret.regression import (
     setup as reg_setup, compare_models as reg_compare,
     pull as reg_pull, save_model as reg_save,
 )
-import warnings, time, io, os, gc, json, base64, requests, zipfile, tempfile
+import warnings, time, io, os, gc, json
 from datetime import datetime
 warnings.filterwarnings("ignore")
 
@@ -666,73 +666,6 @@ print("✅ Loaded:", type(loaded_model))
     return _json.dumps(notebook, indent=2, ensure_ascii=False).encode("utf-8")
 
 
-# ─────────────────────────────────────────────
-#  KAGGLE UPLOAD FUNCTION
-# ─────────────────────────────────────────────
-def upload_notebook_to_kaggle(nb_bytes, notebook_title, dataset_name,
-                               kaggle_username, kaggle_key):
-    """
-    Upload notebook to Kaggle via official Kaggle Kernels API v1.
-    Returns: (success: bool, message: str, url: str)
-    """
-    try:
-        # Build slug: lowercase alphanumeric + hyphens, max 50 chars
-        slug = notebook_title.lower().replace(" ", "-").replace("_", "-")
-        slug = "".join(c for c in slug if c.isalnum() or c == "-")[:50].strip("-")
-        if not slug:
-            slug = "dataforge-notebook"
-
-        # Decode notebook content to string
-        nb_content = nb_bytes.decode("utf-8")
-
-        # Basic auth header
-        auth = base64.b64encode(f"{kaggle_username}:{kaggle_key}".encode()).decode()
-
-        # Kaggle Kernels Push API — correct payload format
-        payload = {
-            "currentRunningVersion": 1,
-            "id": f"{kaggle_username}/{slug}",
-            "title": notebook_title,
-            "language": "python",
-            "kernelType": "notebook",
-            "isPrivate": True,
-            "enableGpu": False,
-            "enableTpu": False,
-            "enableInternet": True,
-            "datasetDataSources": [],
-            "kernelDataSources": [],
-            "competitionDataSources": [],
-            "categoryIds": [],
-            "dockerImagePinningType": "original",
-            "sourceType": "EDITOR_NOTEBOOK",
-            "source": nb_content,        # ← notebook JSON string goes here
-        }
-
-        resp = requests.post(
-            "https://www.kaggle.com/api/v1/kernels/push",
-            headers={
-                "Authorization": f"Basic {auth}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=45,
-        )
-
-        if resp.status_code in [200, 201]:
-            kaggle_url = f"https://www.kaggle.com/{kaggle_username}/{slug}"
-            return True, "Notebook uploaded successfully!", kaggle_url
-        else:
-            try:
-                err_detail = resp.json().get("message", resp.text[:300])
-            except Exception:
-                err_detail = resp.text[:300]
-            return False, f"Kaggle API Error ({resp.status_code}): {err_detail}", ""
-
-    except requests.exceptions.ConnectionError:
-        return False, "Network error — please check your internet connection.", ""
-    except Exception as e:
-        return False, f"Upload failed: {str(e)}", ""
-
 
 # ─────────────────────────────────────────────
 #  MEMORY HELPERS
@@ -1028,8 +961,7 @@ div[data-testid="column"]:nth-child(3) .stButton>button:hover{{border-color:{ACC
 .stAlert{{border-radius:12px !important;border-left-width:4px !important;background:{CARD_BG} !important;}}
 @keyframes slideUp{{from{{opacity:0;transform:translateY(18px)}}to{{opacity:1;transform:none}}}}
 .slide-up{{animation:slideUp .45s ease-out both;}}
-.kaggle-upload-box{{background:{"rgba(32,163,220,0.08)" if T=="dark" else "rgba(32,163,220,0.06)"};border:2px solid {"rgba(32,163,220,0.35)" if T=="dark" else "rgba(32,163,220,0.40)"};border-radius:16px;padding:1.5rem;margin-top:1rem;}}
-.kaggle-success{{background:{"rgba(74,222,128,0.10)" if T=="dark" else "rgba(74,222,128,0.12)"};border:2px solid {"rgba(74,222,128,0.4)" if T=="dark" else "rgba(74,222,128,0.5)"};border-radius:14px;padding:1.25rem 1.5rem;margin-top:1rem;}}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -1614,7 +1546,6 @@ if st.session_state.data is not None:
             ("author_name",""), ("author_title",""), ("author_quote",""),
             ("author_email",""), ("author_linkedin",""), ("author_github",""),
             ("author_kaggle",""), ("author_facebook",""),
-            ("kaggle_username",""), ("kaggle_key",""),
             ("nb_last_bytes", None), ("nb_last_filename",""),
         ]:
             if k not in st.session_state:
@@ -1639,7 +1570,7 @@ if st.session_state.data is not None:
 
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">📓</div><h3>Notebook Builder</h3></div>
         <div style="font-size:.85rem;color:{TEXT2};margin-bottom:1.5rem">
-          Step-by-step configure your notebook — styled HTML markdown sections + Kaggle upload included!
+          Step-by-step configure your notebook — styled HTML markdown sections auto-generated!
         </div>""", unsafe_allow_html=True)
 
         def dot(n):
@@ -1789,14 +1720,14 @@ if st.session_state.data is not None:
 
         st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-        # ── STEP 6: Export + Kaggle Upload ──
+        # ── STEP 6: Export Options ──
         with st.container():
             col_dot, col_body = st.columns([1, 12])
             with col_dot:
                 st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(6)}</div>', unsafe_allow_html=True)
             with col_body:
                 if step >= 6:
-                    st.markdown(f'<div class="nb-step-title">💾 Export & Kaggle Upload</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="nb-step-title">💾 Export Options</div>', unsafe_allow_html=True)
 
                     ex = st.session_state.nb_export
                     ex["save_model"]    = st.checkbox("💾 Save model (.pkl)",            value=ex["save_model"],    key="ex_save")
@@ -1860,89 +1791,7 @@ if st.session_state.data is not None:
                                     mime="application/x-ipynb+json",
                                     key="nb_builder_download"
                                 )
-                            st.success("✅ Notebook ready! Download it or upload directly to Kaggle.")
-
-                            # ── KAGGLE UPLOAD SECTION ──
-                            st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
-                            st.markdown(f"""
-                            <div style="background:{"rgba(32,163,220,0.08)" if T=="dark" else "rgba(32,163,220,0.06)"};
-                                        border:2px solid {"rgba(32,163,220,0.35)" if T=="dark" else "rgba(32,163,220,0.40)"};
-                                        border-radius:16px;padding:1.5rem;margin-top:.5rem">
-                              <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem">
-                                <span style="font-size:1.8rem">🧠</span>
-                                <div>
-                                  <div style="font-size:1rem;font-weight:800;color:{"#20a3dc" if T=="dark" else "#006b8e"}">Upload Directly to Kaggle</div>
-                                  <div style="font-size:.78rem;color:{TEXT3}">Enter your Kaggle credentials — notebook will be uploaded directly to your profile</div>
-                                </div>
-                              </div>
-                            """, unsafe_allow_html=True)
-
-                            kg1, kg2 = st.columns(2)
-                            with kg1:
-                                st.session_state.kaggle_username = st.text_input(
-                                    "👤 Kaggle Username",
-                                    value=st.session_state.kaggle_username,
-                                    placeholder="e.g. muhammadshayan5839",
-                                    key="kg_user"
-                                )
-                            with kg2:
-                                st.session_state.kaggle_key = st.text_input(
-                                    "🔑 Kaggle API Key",
-                                    value=st.session_state.kaggle_key,
-                                    placeholder="Paste your API key here",
-                                    type="password",
-                                    key="kg_key"
-                                )
-
-                            notebook_title_input = st.text_input(
-                                "📝 Notebook Title on Kaggle",
-                                value=f"DataForge AutoML — {str(st.session_state.dataset_name or 'Dataset')}",
-                                key="kg_title"
-                            )
-
-                            st.markdown(f"""
-                              <div style="font-size:.72rem;color:{TEXT3};margin:.4rem 0 .75rem;padding:.5rem .75rem;background:{"rgba(251,191,36,0.08)" if T=="dark" else "rgba(251,191,36,0.12)"};border-radius:8px;border-left:3px solid {ACCENTY}">
-                                💡 <b>Where to find your API Key?</b> Kaggle → Settings → API → "Create New Token" → download kaggle.json
-                              </div>
-                            """, unsafe_allow_html=True)
-                            st.markdown("</div>", unsafe_allow_html=True)
-
-                            if st.button("🚀 Upload to Kaggle", key="kaggle_upload_btn"):
-                                if not st.session_state.kaggle_username.strip():
-                                    st.error("❌ Please enter your Kaggle username!")
-                                elif not st.session_state.kaggle_key.strip():
-                                    st.error("❌ Please enter your Kaggle API key!")
-                                else:
-                                    with st.spinner("🔄 Uploading to Kaggle..."):
-                                        success, message, kaggle_url = upload_notebook_to_kaggle(
-                                            nb_bytes=nb_bytes,
-                                            notebook_title=notebook_title_input,
-                                            dataset_name=str(st.session_state.dataset_name or "dataset"),
-                                            kaggle_username=st.session_state.kaggle_username.strip(),
-                                            kaggle_key=st.session_state.kaggle_key.strip(),
-                                        )
-
-                                    if success:
-                                        st.markdown(f"""
-                                        <div class="kaggle-success">
-                                          <div style="font-size:1.1rem;font-weight:800;color:{ACCENT1};margin-bottom:.5rem">🎉 Notebook Successfully Uploaded to Kaggle!</div>
-                                          <div style="font-size:.875rem;color:{TEXT2};margin-bottom:.75rem">{message}</div>
-                                          <a href="{kaggle_url}" target="_blank"
-                                             style="display:inline-flex;align-items:center;gap:.5rem;
-                                                    background:linear-gradient(135deg,rgba(32,163,220,0.2),rgba(32,163,220,0.1));
-                                                    border:2px solid rgba(32,163,220,0.5);
-                                                    color:#20a3dc;padding:.65rem 1.25rem;border-radius:10px;
-                                                    text-decoration:none;font-weight:700;font-size:.9rem;">
-                                            🧠 View on Kaggle →
-                                          </a>
-                                          <div style="font-size:.72rem;color:{TEXT3};margin-top:.6rem;">
-                                            ⚠️ Kaggle notebooks may take 1-2 minutes to become publicly visible
-                                          </div>
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                    else:
-                                        st.error(message)
-                                        st.info("💡 If upload fails, download the notebook and upload it manually to Kaggle.")
+                            st.success("✅ Notebook ready! Click the button above to download.")
 
                         except Exception as nb_err:
                             st.error(f"❌ Notebook generation failed: {nb_err}")
@@ -1951,10 +1800,10 @@ if st.session_state.data is not None:
                         with nb6c1b:
                             if st.button("← Back", key="nb_back6b"): st.session_state.nb_step = 5; st.rerun()
                         st.warning("⚠️ Please complete training in the **Train Model** tab first — then come back to generate your notebook!")
-                        st.info("💡 After training, return here to generate and upload your notebook to Kaggle.")
+                        st.info("💡 After training, return here to generate and download your notebook.")
 
                 else:
-                    st.markdown(f'<div class="nb-step-title-idle">💾 Export & Kaggle Upload</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="nb-step-title-idle">💾 Export Options</div>', unsafe_allow_html=True)
 
 else:
     # ── WELCOME SCREEN ──
@@ -1986,7 +1835,7 @@ else:
     <div style="background:{"rgba(74,222,128,0.06)" if T=="dark" else "rgba(124,58,237,0.06)"};border:2px solid {"rgba(74,222,128,0.25)" if T=="dark" else "rgba(124,58,237,0.25)"};border-radius:20px;padding:2rem;text-align:center;margin-bottom:2rem">
       <div style="font-size:1.4rem;font-weight:900;background:{HERO_H1_GRAD};-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:1rem">🎁 Everything Free. No Login. No Limits.</div>
       <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:.75rem">
-        {"".join(f'<span class="insight-chip" style="border-color:{ACCENT1};color:{ACCENT1}">{f}</span>' for f in ["✅ XGBoost","✅ LightGBM","✅ CatBoost","✅ 10-fold CV","✅ Model Export (.pkl)","✅ Notebook Export (.ipynb)","✅ Kaggle Direct Upload","✅ 13+ Algorithms","✅ No Sign-up Required"])}
+        {"".join(f'<span class="insight-chip" style="border-color:{ACCENT1};color:{ACCENT1}">{f}</span>' for f in ["✅ XGBoost","✅ LightGBM","✅ CatBoost","✅ 10-fold CV","✅ Model Export (.pkl)","✅ Notebook Export (.ipynb)","✅ 13+ Algorithms","✅ No Sign-up Required"])}
       </div>
     </div>
     <div style="text-align:center;color:{TEXT3};font-size:.82rem;padding-bottom:1.5rem">
