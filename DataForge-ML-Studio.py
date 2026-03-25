@@ -2022,7 +2022,7 @@ if st.session_state.data is not None:
 
 <script>
   // ── EmailJS init ──
-  emailjs.init("xqgDMblJbHRCeA0Cq");  // Public Key
+  emailjs.init("KPju9potPVtR0LXSX");  // Public Key
 
   const LABELS = ["", "😞 Poor", "😕 Fair", "😊 Good", "😄 Great", "🤩 Excellent!"];
   const COLORS = ["","#f87171","#fb923c","#fbbf24","#4ade80","#4ade80"];
@@ -2083,7 +2083,7 @@ if st.session_state.data is not None:
     const feedback   = feedTxt.value.trim() || "No feedback provided.";
     const now        = new Date().toLocaleString("en-PK", {{timeZone:"Asia/Karachi"}});
 
-    emailjs.send("service_ck7avgg", "template_dataforge_rating", {{
+    emailjs.send("service_7gw3npx", "template_i2fgsga", {{
       to_email:    "shayan.corner@gmail.com",
       from_name:   "{_au}",
       rating:      selected + " / 5  " + starEmojis,
