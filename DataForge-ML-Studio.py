@@ -304,7 +304,15 @@ def generate_notebook(df, target_col, problem_type, results_df, best_model_name,
                       author_email="", author_linkedin="", author_github="",
                       author_kaggle="", author_facebook=""):
 
-    eda  = eda_selections   or {"distributions":True,"correlation":True,"missing":True,"target_dist":True,"boxplots":True,"scatter_matrix":True,"cat_bars":True,"outlier_plot":True}
+    eda  = eda_selections   or {
+        "distributions":True,"correlation":True,"missing":True,"target_dist":True,
+        "boxplots":True,"scatter_matrix":True,"cat_bars":True,"outlier_plot":True,
+        # NEW advanced EDA options
+        "target_correlation":True,"feature_importance_eda":True,
+        "skewness_kurtosis":True,"value_counts_table":True,
+        "numeric_summary_styled":True,"categorical_summary":True,
+        "outlier_table":True,"iqr_analysis":True,
+    }
     pre  = pre_selections   or {"drop_dups":True,"handle_missing":True,"normalize":True,"remove_outliers":False}
     trn  = train_selections or {"model_table":True,"bar_chart":True,"radar_chart":True,"feature_importance":True}
     exp  = export_selections or {"save_model":True,"load_predict":True,"summary_table":True}
@@ -358,12 +366,13 @@ def generate_notebook(df, target_col, problem_type, results_df, best_model_name,
 
     # ── IMPORTS ──
     cells.append(md_cell(banners["imports"], "s1"))
-    cells.append(code_cell(f"""# !pip install pycaret plotly pandas numpy openpyxl
+    cells.append(code_cell(f"""# !pip install pycaret plotly pandas numpy openpyxl scipy
 import pandas as pd, numpy as np, warnings
 warnings.filterwarnings('ignore')
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from scipy import stats
 from {pm} import (
     setup as {sp}_setup, compare_models as {sp}_compare,
     pull as {sp}_pull, save_model as {sp}_save, load_model as {sp}_load,
@@ -505,6 +514,260 @@ fig = px.bar(out_df, x="column", y="pct", title="⚠️ Outlier % per Column (IQ
 fig.update_layout(template="plotly_dark", height=380)
 fig.show()
 print(out_df.to_string(index=False))""", "s4_out"))
+
+    # ── NEW ADVANCED EDA CELLS ──
+
+    if eda.get("target_correlation") and num_cols and len(num_cols) >= 2:
+        if not eda_cells_added:
+            cells.append(md_cell(banners["eda"], "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# 🎯 Target Correlation Analysis — which features matter most?
+num_cols = {ncr}
+target = "{target_col}"
+if target in num_cols:
+    corr_with_target = df[num_cols].corr()[target].drop(target).sort_values(key=abs, ascending=True)
+    colors = ["#f87171" if v < 0 else "#4ade80" for v in corr_with_target.values]
+    fig = go.Figure(go.Bar(
+        x=corr_with_target.values, y=corr_with_target.index,
+        orientation="h", marker_color=colors,
+        text=[f"{{v:.3f}}" for v in corr_with_target.values],
+        textposition="outside"
+    ))
+    fig.update_layout(template="plotly_dark", height=max(350, len(corr_with_target)*28),
+        title=f"🎯 Feature Correlation with Target: {{target}}",
+        xaxis_title="Pearson Correlation", yaxis_title="Feature",
+        shapes=[dict(type="line", x0=0, x1=0, y0=-0.5, y1=len(corr_with_target)-0.5,
+                     line=dict(color="#ffffff", width=1.5, dash="dot"))])
+    fig.show()
+    print("\\n📊 Top 5 positively correlated features:")
+    print(corr_with_target.tail(5).to_string())
+    print("\\n📊 Top 5 negatively correlated features:")
+    print(corr_with_target.head(5).to_string())
+else:
+    print(f"ℹ️ Target '{target}' is categorical — showing class-wise distributions instead.")
+    for col in num_cols[:4]:
+        fig = px.box(df, x=target, y=col, color=target,
+                     title=f"📦 {{col}} by Target Class",
+                     color_discrete_sequence=["#4ade80","#60a5fa","#c084fc","#fbbf24","#f87171"])
+        fig.update_layout(template="plotly_dark", height=350)
+        fig.show()""", "s4_tgt_corr"))
+
+    if eda.get("skewness_kurtosis") and num_cols:
+        if not eda_cells_added:
+            cells.append(md_cell(banners["eda"], "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# 📐 Skewness & Kurtosis Analysis
+from scipy.stats import skew, kurtosis
+num_cols = {ncr}
+sk_data = []
+for col in num_cols:
+    s = df[col].dropna()
+    sk_data.append({{
+        "Feature": col,
+        "Skewness": round(skew(s), 3),
+        "Kurtosis": round(kurtosis(s), 3),
+        "Mean": round(s.mean(), 3),
+        "Std": round(s.std(), 3),
+    }})
+sk_df = pd.DataFrame(sk_data).sort_values("Skewness", key=abs, ascending=False)
+print("📐 Skewness & Kurtosis Table:")
+print(sk_df.to_string(index=False))
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=["Skewness per Feature", "Kurtosis per Feature"])
+colors_sk = ["#f87171" if abs(v) > 1 else "#fbbf24" if abs(v) > 0.5 else "#4ade80" for v in sk_df["Skewness"]]
+colors_kt = ["#c084fc" if abs(v) > 3 else "#60a5fa" for v in sk_df["Kurtosis"]]
+fig.add_trace(go.Bar(x=sk_df["Skewness"], y=sk_df["Feature"], orientation="h",
+    marker_color=colors_sk, name="Skewness"), row=1, col=1)
+fig.add_trace(go.Bar(x=sk_df["Kurtosis"], y=sk_df["Feature"], orientation="h",
+    marker_color=colors_kt, name="Kurtosis"), row=1, col=2)
+fig.update_layout(template="plotly_dark", height=max(300, len(sk_df)*30),
+    title_text="📐 Skewness & Kurtosis (|Skew| > 1 = highly skewed 🔴)", showlegend=False)
+fig.show()""", "s4_skew"))
+
+    if eda.get("numeric_summary_styled") and num_cols:
+        if not eda_cells_added:
+            cells.append(md_cell(banners["eda"], "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# 📊 Enhanced Numeric Summary Table
+num_cols = {ncr}
+summary_rows = []
+for col in num_cols:
+    s = df[col].dropna()
+    Q1, Q3 = s.quantile(0.25), s.quantile(0.75)
+    IQR = Q3 - Q1
+    outliers = ((s < Q1 - 1.5*IQR) | (s > Q3 + 1.5*IQR)).sum()
+    summary_rows.append({{
+        "Feature":      col,
+        "Count":        int(s.count()),
+        "Missing%":     round(df[col].isnull().mean() * 100, 1),
+        "Mean":         round(s.mean(), 4),
+        "Std":          round(s.std(), 4),
+        "Min":          round(s.min(), 4),
+        "Q1 (25%)":     round(Q1, 4),
+        "Median":       round(s.median(), 4),
+        "Q3 (75%)":     round(Q3, 4),
+        "Max":          round(s.max(), 4),
+        "IQR":          round(IQR, 4),
+        "Outliers":     int(outliers),
+        "Outlier%":     round(outliers / len(df) * 100, 1),
+        "Skewness":     round(s.skew(), 3),
+    }})
+summary_df = pd.DataFrame(summary_rows)
+print("📊 Complete Numeric Feature Summary:")
+summary_df.style.background_gradient(subset=["Missing%","Outlier%"], cmap="RdYlGn_r")\\
+          .background_gradient(subset=["Skewness"], cmap="RdBu")\\
+          .format(precision=3)""", "s4_num_summary"))
+
+    if eda.get("categorical_summary") and cat_cols:
+        if not eda_cells_added:
+            cells.append(md_cell(banners["eda"], "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# 🔤 Categorical Features Deep Dive
+cat_cols = {ccr}
+cat_summary = []
+for col in cat_cols:
+    s = df[col]
+    vc = s.value_counts()
+    cat_summary.append({{
+        "Feature":      col,
+        "Unique":       s.nunique(),
+        "Missing%":     round(s.isnull().mean() * 100, 1),
+        "Top Value":    str(vc.index[0]) if len(vc) > 0 else "N/A",
+        "Top Count":    int(vc.iloc[0]) if len(vc) > 0 else 0,
+        "Top%":         round(vc.iloc[0] / len(df) * 100, 1) if len(vc) > 0 else 0,
+        "Cardinality":  "Low" if s.nunique() <= 5 else "Medium" if s.nunique() <= 20 else "High"
+    }})
+cat_df = pd.DataFrame(cat_summary)
+print("🔤 Categorical Features Summary:")
+print(cat_df.to_string(index=False))
+
+# Cardinality bar chart
+fig = px.bar(cat_df.sort_values("Unique", ascending=True),
+    x="Unique", y="Feature", orientation="h",
+    color="Unique", color_continuous_scale=["#4ade80","#fbbf24","#f87171"],
+    title="🔤 Categorical Cardinality (Unique Values per Feature)",
+    text="Unique")
+fig.update_layout(template="plotly_dark", height=max(280, len(cat_cols)*35),
+    coloraxis_showscale=False)
+fig.show()""", "s4_cat_summary"))
+
+    if eda.get("iqr_analysis") and num_cols:
+        if not eda_cells_added:
+            cells.append(md_cell(banners["eda"], "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# 📏 IQR-based Outlier Detail Table
+num_cols = {ncr}
+iqr_rows = []
+for col in num_cols:
+    s = df[col].dropna()
+    Q1, Q3 = s.quantile(0.25), s.quantile(0.75)
+    IQR = Q3 - Q1
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+    n_low  = (s < lower).sum()
+    n_high = (s > upper).sum()
+    iqr_rows.append({{
+        "Feature": col, "Q1": round(Q1, 3), "Q3": round(Q3, 3),
+        "IQR": round(IQR, 3), "Lower Fence": round(lower, 3),
+        "Upper Fence": round(upper, 3),
+        "Low Outliers": int(n_low), "High Outliers": int(n_high),
+        "Total Outliers": int(n_low + n_high),
+        "Outlier%": round((n_low + n_high) / len(df) * 100, 2)
+    }})
+iqr_df = pd.DataFrame(iqr_rows).sort_values("Total Outliers", ascending=False)
+print("📏 IQR Outlier Analysis Table:")
+print(iqr_df.to_string(index=False))
+
+# Outlier count stacked bar
+fig = go.Figure()
+fig.add_trace(go.Bar(x=iqr_df["Feature"], y=iqr_df["Low Outliers"],
+    name="Low Outliers", marker_color="#60a5fa"))
+fig.add_trace(go.Bar(x=iqr_df["Feature"], y=iqr_df["High Outliers"],
+    name="High Outliers", marker_color="#f87171"))
+fig.update_layout(barmode="stack", template="plotly_dark", height=380,
+    title="📏 Low vs High Outliers per Feature (IQR Method)")
+fig.show()""", "s4_iqr"))
+
+    if eda.get("value_counts_table") and cat_cols:
+        if not eda_cells_added:
+            cells.append(md_cell(banners["eda"], "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# 📋 Full Value Counts Tables for All Categorical Features
+cat_cols = {ccr}
+for col in cat_cols:
+    vc = df[col].value_counts(dropna=False)
+    vc_df = pd.DataFrame({{
+        "Value": vc.index.astype(str),
+        "Count": vc.values,
+        "Percentage": (vc.values / len(df) * 100).round(2)
+    }})
+    print(f"\\n📋 Value Counts — {{col}} ({{df[col].nunique()}} unique values):")
+    print(vc_df.head(15).to_string(index=False))
+    if len(vc) > 8:
+        print(f"  ... and {{len(vc) - 8}} more unique values")""", "s4_vc_table"))
+
+    if eda.get("feature_importance_eda") and num_cols and len(num_cols) >= 2:
+        if not eda_cells_added:
+            cells.append(md_cell(banners["eda"], "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# ⭐ Quick Feature Importance (using RandomForest — before AutoML)
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.preprocessing import LabelEncoder
+import warnings; warnings.filterwarnings("ignore")
+
+target = "{target_col}"
+problem = "{problem_type}"
+
+# Prepare features (numeric only for quick RF)
+X_quick = df.select_dtypes(include="number").drop(columns=[target], errors="ignore").fillna(0)
+y_quick = df[target].fillna(df[target].mode()[0])
+
+if len(X_quick.columns) > 0 and len(X_quick) > 10:
+    try:
+        if problem == "classification":
+            le = LabelEncoder()
+            y_enc = le.fit_transform(y_quick.astype(str))
+            rf = RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=-1, max_depth=5)
+            rf.fit(X_quick, y_enc)
+        else:
+            rf = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1, max_depth=5)
+            rf.fit(X_quick, y_quick)
+        
+        fi = pd.DataFrame({{"Feature": X_quick.columns, "Importance": rf.feature_importances_}})
+        fi = fi.sort_values("Importance", ascending=True)
+        
+        fig = px.bar(fi, x="Importance", y="Feature", orientation="h",
+                     title="⭐ Quick Feature Importance (RandomForest — EDA Phase)",
+                     color="Importance", color_continuous_scale=["#60a5fa","#4ade80","#fbbf24"],
+                     text=fi["Importance"].round(4))
+        fig.update_layout(template="plotly_dark", height=max(300, len(fi)*30),
+            coloraxis_showscale=False)
+        fig.update_traces(textposition="outside")
+        fig.show()
+        print("\\n⭐ Top 5 most important features:")
+        print(fi.tail(5).sort_values("Importance", ascending=False).to_string(index=False))
+    except Exception as e:
+        print(f"Could not compute feature importance: {{e}}")
+else:
+    print("ℹ️ Not enough numeric features for quick importance analysis.")""", "s4_fi_eda"))
+
+    if eda.get("outlier_table") and num_cols:
+        if not eda_cells_added:
+            cells.append(md_cell(banners["eda"], "s4"))
+            eda_cells_added = True
+        cells.append(code_cell(f"""# 🔎 Outlier Sample Rows — What do actual outliers look like?
+num_cols = {ncr}
+all_outlier_mask = pd.Series([False] * len(df))
+for col in num_cols:
+    Q1, Q3 = df[col].quantile(0.25), df[col].quantile(0.75)
+    IQR = Q3 - Q1
+    mask = (df[col] < Q1 - 1.5*IQR) | (df[col] > Q3 + 1.5*IQR)
+    all_outlier_mask = all_outlier_mask | mask
+
+outlier_rows = df[all_outlier_mask]
+print(f"🔎 Total rows with at least one outlier: {{len(outlier_rows):,}} / {{len(df):,}} ({{len(outlier_rows)/len(df)*100:.1f}})%")
+print("\\n📋 Sample outlier rows (first 10):")
+outlier_rows.head(10)""", "s4_out_table"))
 
     # ── PREPROCESSING ──
     pre_steps = []
@@ -962,6 +1225,42 @@ div[data-testid="column"]:nth-child(3) .stButton>button:hover{{border-color:{ACC
 @keyframes slideUp{{from{{opacity:0;transform:translateY(18px)}}to{{opacity:1;transform:none}}}}
 .slide-up{{animation:slideUp .45s ease-out both;}}
 
+/* ── NEW: Advanced EDA sub-tab styles ── */
+.eda-section-header{{
+    background:{"linear-gradient(135deg,rgba(74,222,128,0.08),rgba(96,165,250,0.05))" if T=="dark" else "linear-gradient(135deg,rgba(124,58,237,0.06),rgba(37,99,235,0.04))"};
+    border:1px solid {"rgba(74,222,128,0.20)" if T=="dark" else "rgba(124,58,237,0.20)"};
+    border-radius:14px;
+    padding:.9rem 1.25rem;
+    margin:1.5rem 0 1rem;
+    display:flex;
+    align-items:center;
+    gap:.75rem;
+}}
+.eda-section-header .eda-icon{{font-size:1.4rem;}}
+.eda-section-header .eda-title{{font-size:1rem;font-weight:800;color:{TEXT1};}}
+.eda-section-header .eda-subtitle{{font-size:.75rem;color:{TEXT3};margin-top:.1rem;}}
+.eda-insight-box{{
+    background:{CARD_BG};
+    border:1px solid {BORDER};
+    border-radius:12px;
+    padding:1rem 1.25rem;
+    margin:.5rem 0;
+}}
+.eda-metric-row{{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:.4rem 0;
+    border-bottom:1px solid {"rgba(255,255,255,0.04)" if T=="dark" else "rgba(0,0,0,0.05)"};
+    font-size:.82rem;
+}}
+.eda-metric-label{{color:{TEXT3};font-weight:600;}}
+.eda-metric-val{{color:{TEXT1};font-family:'JetBrains Mono',monospace;font-size:.8rem;}}
+.eda-badge{{display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:6px;font-size:.7rem;font-weight:700;}}
+.eda-badge-green{{background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.25);}}
+.eda-badge-red{{background:rgba(248,113,113,0.12);color:#f87171;border:1px solid rgba(248,113,113,0.25);}}
+.eda-badge-yellow{{background:rgba(251,191,36,0.12);color:#fbbf24;border:1px solid rgba(251,191,36,0.25);}}
+.eda-badge-blue{{background:rgba(96,165,250,0.12);color:#60a5fa;border:1px solid rgba(96,165,250,0.25);}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1175,58 +1474,476 @@ if st.session_state.data is not None:
             st.dataframe(df.describe().round(3), height=300)
 
     # ═══════════════════════════
-    # TAB 2 — EDA
+    # TAB 2 — EDA (ENHANCED)
     # ═══════════════════════════
     with tab2:
         st.markdown(f"""<div class="section-head"><div class="icon-wrap">🧬</div><h3>Exploratory Data Analysis</h3></div>""", unsafe_allow_html=True)
 
-        if not num_cols:
-            st.info("No numerical columns found.")
-        else:
-            st.markdown("#### 📈 Distribution Explorer")
-            dv1, dv2 = st.columns([3, 2])
-            with dv1:
-                col_pick = st.selectbox("Select column", num_cols + cat_cols, key="eda_col")
-            with dv2:
-                chart_type = st.selectbox("Chart type", ["Histogram","Box","Violin"] if col_pick in num_cols else ["Bar Chart"], key="chart_type")
+        # ── EDA Sub-tabs ──
+        eda_sub1, eda_sub2, eda_sub3, eda_sub4, eda_sub5, eda_sub6 = st.tabs([
+            "📈 Distributions", "🔥 Correlations", "⚠️ Outliers",
+            "🎯 Target Analysis", "🔤 Categorical", "📐 Advanced Stats"
+        ])
 
-            cv1, cv2 = st.columns([3, 2])
-            with cv1:
-                if col_pick in num_cols:
-                    if chart_type == "Histogram":
-                        fig = px.histogram(df, x=col_pick, nbins=40, color_discrete_sequence=[ACCENT1], template=CHART_TEMPLATE, title=f"Distribution · {col_pick}")
-                    elif chart_type == "Box":
-                        fig = px.box(df, y=col_pick, color_discrete_sequence=[ACCENT1], template=CHART_TEMPLATE, title=f"Box Plot · {col_pick}")
+        # ── SUB-TAB 1: DISTRIBUTIONS ──
+        with eda_sub1:
+            if not num_cols:
+                st.info("No numerical columns found.")
+            else:
+                st.markdown("#### 📈 Distribution Explorer")
+                dv1, dv2 = st.columns([3, 2])
+                with dv1:
+                    col_pick = st.selectbox("Select column", num_cols + cat_cols, key="eda_col")
+                with dv2:
+                    chart_type = st.selectbox("Chart type", ["Histogram","Box","Violin"] if col_pick in num_cols else ["Bar Chart"], key="chart_type")
+
+                cv1, cv2 = st.columns([3, 2])
+                with cv1:
+                    if col_pick in num_cols:
+                        if chart_type == "Histogram":
+                            fig = px.histogram(df, x=col_pick, nbins=40, color_discrete_sequence=[ACCENT1], template=CHART_TEMPLATE, title=f"Distribution · {col_pick}")
+                        elif chart_type == "Box":
+                            fig = px.box(df, y=col_pick, color_discrete_sequence=[ACCENT1], template=CHART_TEMPLATE, title=f"Box Plot · {col_pick}")
+                        else:
+                            fig = px.violin(df, y=col_pick, color_discrete_sequence=[ACCENT1], box=True, template=CHART_TEMPLATE, title=f"Violin · {col_pick}")
                     else:
-                        fig = px.violin(df, y=col_pick, color_discrete_sequence=[ACCENT1], box=True, template=CHART_TEMPLATE, title=f"Violin · {col_pick}")
-                else:
-                    vc = df[col_pick].value_counts().head(15)
-                    fig = px.bar(x=vc.index, y=vc.values, color=vc.values, color_continuous_scale=[ACCENT2, ACCENT1], template=CHART_TEMPLATE, title=f"Top values · {col_pick}")
-                    fig.update_layout(showlegend=False, coloraxis_showscale=False)
-                fig.update_layout(**chart_layout(height=340))
-                st.plotly_chart(fig, width="stretch")
+                        vc = df[col_pick].value_counts().head(15)
+                        fig = px.bar(x=vc.index, y=vc.values, color=vc.values, color_continuous_scale=[ACCENT2, ACCENT1], template=CHART_TEMPLATE, title=f"Top values · {col_pick}")
+                        fig.update_layout(showlegend=False, coloraxis_showscale=False)
+                    fig.update_layout(**chart_layout(height=340))
+                    st.plotly_chart(fig, width="stretch")
 
-            with cv2:
-                s = df[col_pick]
-                rows = {"Count":f"{s.count():,}","Missing":f"{s.isnull().sum()} ({s.isnull().mean()*100:.1f}%)","Unique":f"{s.nunique():,}"}
-                if col_pick in num_cols:
-                    rows.update({"Mean":f"{s.mean():.4f}","Std":f"{s.std():.4f}","Min":f"{s.min():.4f}","Median":f"{s.median():.4f}","Max":f"{s.max():.4f}","Skew":f"{s.skew():.3f}"})
-                st.markdown(f'<div class="sidebar-section" style="margin-top:2.2rem">', unsafe_allow_html=True)
-                for k, v in rows.items():
-                    st.markdown(f"""<div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid {BORDER}"><span style="font-size:.78rem;color:{TEXT3};font-weight:600">{k}</span><span style="font-size:.82rem;color:{TEXT1};font-family:'JetBrains Mono',monospace">{v}</span></div>""", unsafe_allow_html=True)
-                st.markdown("</div>", unsafe_allow_html=True)
+                with cv2:
+                    s = df[col_pick]
+                    rows_dict = {"Count":f"{s.count():,}","Missing":f"{s.isnull().sum()} ({s.isnull().mean()*100:.1f}%)","Unique":f"{s.nunique():,}"}
+                    if col_pick in num_cols:
+                        from scipy.stats import skew as _skew, kurtosis as _kurt
+                        sk_val = _skew(s.dropna())
+                        rows_dict.update({
+                            "Mean":f"{s.mean():.4f}","Std":f"{s.std():.4f}",
+                            "Min":f"{s.min():.4f}","Median":f"{s.median():.4f}","Max":f"{s.max():.4f}",
+                            "Skewness":f"{sk_val:.3f}",
+                            "Kurtosis":f"{_kurt(s.dropna()):.3f}",
+                        })
+                    st.markdown(f'<div class="sidebar-section" style="margin-top:2.2rem">', unsafe_allow_html=True)
+                    for k, v in rows_dict.items():
+                        st.markdown(f"""<div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid {BORDER}"><span style="font-size:.78rem;color:{TEXT3};font-weight:600">{k}</span><span style="font-size:.82rem;color:{TEXT1};font-family:'JetBrains Mono',monospace">{v}</span></div>""", unsafe_allow_html=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
 
-            if len(num_cols) >= 2:
                 st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+                # All distributions grid
+                if len(num_cols) > 1:
+                    st.markdown("#### 📊 All Numeric Distributions Grid")
+                    max_plot_cols = st.slider("Max features to show", 3, min(12, len(num_cols)), min(9, len(num_cols)), key="dist_grid_slider")
+                    cols_to_plot = num_cols[:max_plot_cols]
+                    n_c = min(3, len(cols_to_plot))
+                    n_r = (len(cols_to_plot) + n_c - 1) // n_c
+                    from plotly.subplots import make_subplots
+                    fig_grid = make_subplots(rows=n_r, cols=n_c, subplot_titles=cols_to_plot)
+                    for i, col in enumerate(cols_to_plot):
+                        fig_grid.add_trace(go.Histogram(x=df[col], name=col, marker_color=ACCENT1, opacity=0.8),
+                                      row=i//n_c+1, col=i%n_c+1)
+                    fig_grid.update_layout(**chart_layout(height=280*n_r, title_text="📊 All Feature Distributions"), showlegend=False)
+                    st.plotly_chart(fig_grid, width="stretch")
+
+        # ── SUB-TAB 2: CORRELATIONS ──
+        with eda_sub2:
+            if len(num_cols) >= 2:
                 st.markdown("#### 🔥 Correlation Heatmap")
-                corr = df[num_cols[:15]].corr().round(2)
-                fig_h = go.Figure(go.Heatmap(
-                    z=corr.values, x=corr.columns, y=corr.index,
-                    colorscale=[[0,ACCENTR],[.5,BG2],[1,ACCENT1]],
-                    zmid=0, text=corr.values.round(2), texttemplate="%{text}",
-                    textfont=dict(size=9, family="JetBrains Mono")))
-                fig_h.update_layout(**chart_layout(height=460))
-                st.plotly_chart(fig_h, width="stretch")
+                corr_cols = st.multiselect("Select columns for correlation", num_cols, default=num_cols[:min(12, len(num_cols))], key="corr_cols_select")
+                if len(corr_cols) >= 2:
+                    corr = df[corr_cols].corr().round(3)
+                    fig_h = go.Figure(go.Heatmap(
+                        z=corr.values, x=corr.columns, y=corr.index,
+                        colorscale=[[0,ACCENTR],[.5,BG2],[1,ACCENT1]],
+                        zmid=0, text=corr.values.round(2), texttemplate="%{text}",
+                        textfont=dict(size=9, family="JetBrains Mono")))
+                    fig_h.update_layout(**chart_layout(height=500))
+                    st.plotly_chart(fig_h, width="stretch")
+
+                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+                    # Top correlating pairs
+                    st.markdown("#### 🔗 Strongest Correlated Pairs")
+                    corr_pairs = []
+                    for i in range(len(corr.columns)):
+                        for j in range(i+1, len(corr.columns)):
+                            corr_pairs.append({
+                                "Feature A": corr.columns[i],
+                                "Feature B": corr.columns[j],
+                                "Correlation": round(corr.iloc[i,j], 4),
+                                "Abs": abs(round(corr.iloc[i,j], 4))
+                            })
+                    if corr_pairs:
+                        pairs_df = pd.DataFrame(corr_pairs).sort_values("Abs", ascending=False).drop("Abs", axis=1)
+                        top_pairs = pairs_df.head(15)
+                        colors_p = [ACCENTR if v < 0 else ACCENT1 for v in top_pairs["Correlation"]]
+                        fig_p = go.Figure(go.Bar(
+                            x=top_pairs["Correlation"],
+                            y=[f"{a} ↔ {b}" for a, b in zip(top_pairs["Feature A"], top_pairs["Feature B"])],
+                            orientation="h", marker_color=colors_p,
+                            text=[f"{v:.3f}" for v in top_pairs["Correlation"]], textposition="outside"
+                        ))
+                        fig_p.update_layout(**chart_layout(height=max(300, len(top_pairs)*28),
+                            title="🔗 Top 15 Correlated Pairs",
+                            shapes=[dict(type="line", x0=0, x1=0, y0=-0.5, y1=len(top_pairs)-0.5,
+                                        line=dict(color=TEXT3, width=1, dash="dot"))]))
+                        st.plotly_chart(fig_p, width="stretch")
+
+                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+                    # Scatter plot for selected pair
+                    st.markdown("#### 🔵 Feature vs Feature Scatter")
+                    sc1, sc2, sc3 = st.columns(3)
+                    with sc1:
+                        x_feat = st.selectbox("X-axis", num_cols, key="scatter_x")
+                    with sc2:
+                        y_feat = st.selectbox("Y-axis", num_cols, index=min(1, len(num_cols)-1), key="scatter_y")
+                    with sc3:
+                        color_feat = st.selectbox("Color by (optional)", ["None"] + cat_cols + num_cols, key="scatter_color")
+                    color_col = None if color_feat == "None" else color_feat
+                    fig_sc = px.scatter(df, x=x_feat, y=y_feat, color=color_col,
+                                        title=f"🔵 {x_feat} vs {y_feat}",
+                                        trendline="ols", template=CHART_TEMPLATE,
+                                        opacity=0.7,
+                                        color_discrete_sequence=[ACCENT1, ACCENT2, ACCENT3, ACCENTR])
+                    fig_sc.update_layout(**chart_layout(height=420))
+                    st.plotly_chart(fig_sc, width="stretch")
+            else:
+                st.info("Need at least 2 numerical columns for correlation analysis.")
+
+        # ── SUB-TAB 3: OUTLIERS ──
+        with eda_sub3:
+            if not num_cols:
+                st.info("No numerical columns found for outlier analysis.")
+            else:
+                st.markdown("#### ⚠️ Outlier Detection — IQR Method")
+
+                # Compute outlier stats
+                outlier_data = []
+                for col in num_cols:
+                    s = df[col].dropna()
+                    Q1, Q3 = s.quantile(0.25), s.quantile(0.75)
+                    IQR = Q3 - Q1
+                    lower = Q1 - 1.5 * IQR
+                    upper = Q3 + 1.5 * IQR
+                    n_low  = int((s < lower).sum())
+                    n_high = int((s > upper).sum())
+                    total  = n_low + n_high
+                    outlier_data.append({
+                        "Feature": col, "Q1": round(Q1,3), "Q3": round(Q3,3),
+                        "IQR": round(IQR,3), "Lower Fence": round(lower,3),
+                        "Upper Fence": round(upper,3),
+                        "Low Outliers": n_low, "High Outliers": n_high,
+                        "Total Outliers": total,
+                        "Outlier%": round(total/len(df)*100, 2)
+                    })
+                out_df = pd.DataFrame(outlier_data).sort_values("Total Outliers", ascending=False)
+
+                # Summary strip
+                total_out_rows = int(df[num_cols].apply(lambda col: (
+                    (col < col.quantile(0.25) - 1.5*(col.quantile(0.75)-col.quantile(0.25))) |
+                    (col > col.quantile(0.75) + 1.5*(col.quantile(0.75)-col.quantile(0.25)))
+                )).any(axis=1).sum())
+                clean_pct = round((1 - total_out_rows / len(df)) * 100, 1)
+                o1, o2, o3, o4 = st.columns(4)
+                for col_w, label, val, sub, cls in [
+                    (o1, "Outlier Rows", f"{total_out_rows:,}", f"{100-clean_pct:.1f}% of data", "warn" if total_out_rows > 0 else "good"),
+                    (o2, "Clean Rows", f"{len(df)-total_out_rows:,}", f"{clean_pct:.1f}% of data", "good"),
+                    (o3, "Features with Outliers", f"{int((out_df['Total Outliers']>0).sum())}", f"of {len(num_cols)} numeric", "warn"),
+                    (o4, "Most Outliers", out_df.iloc[0]["Feature"] if len(out_df)>0 else "—", f"{out_df.iloc[0]['Outlier%']:.1f}%" if len(out_df)>0 else "", "danger"),
+                ]:
+                    with col_w:
+                        st.markdown(f"""<div class="stat-card {cls}"><div class="bar"></div>
+                        <div class="label">{label}</div><div class="value" style="font-size:1.4rem">{val}</div>
+                        <div class="sub">{sub}</div></div>""", unsafe_allow_html=True)
+
+                st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+                # Stacked bar: low vs high outliers
+                fig_out = go.Figure()
+                fig_out.add_trace(go.Bar(x=out_df["Feature"], y=out_df["Low Outliers"],
+                    name="Low Outliers (below fence)", marker_color=ACCENT2))
+                fig_out.add_trace(go.Bar(x=out_df["Feature"], y=out_df["High Outliers"],
+                    name="High Outliers (above fence)", marker_color=ACCENTR))
+                fig_out.update_layout(**chart_layout(barmode="stack", height=380,
+                    title="⚠️ Low vs High Outliers per Feature"))
+                st.plotly_chart(fig_out, width="stretch")
+
+                # Outlier % per feature
+                out_sorted = out_df.sort_values("Outlier%", ascending=True)
+                colors_out = [ACCENTR if v > 5 else ACCENTY if v > 2 else ACCENT1 for v in out_sorted["Outlier%"]]
+                fig_out2 = go.Figure(go.Bar(
+                    x=out_sorted["Outlier%"], y=out_sorted["Feature"],
+                    orientation="h", marker_color=colors_out,
+                    text=[f"{v:.1f}%" for v in out_sorted["Outlier%"]], textposition="outside"
+                ))
+                fig_out2.update_layout(**chart_layout(height=max(280, len(out_sorted)*30),
+                    title="📊 Outlier % per Feature (🔴 >5%, 🟡 2-5%, 🟢 <2%)"))
+                st.plotly_chart(fig_out2, width="stretch")
+
+                st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+                st.markdown("#### 📋 Detailed IQR Table")
+                st.dataframe(out_df.style.background_gradient(subset=["Outlier%"], cmap="RdYlGn_r")
+                             .format({"Outlier%":"{:.2f}%"}), height=300)
+
+                st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+                st.markdown("#### 🔍 Outlier Rows Inspector")
+                inspect_col = st.selectbox("Inspect outliers in column", num_cols, key="inspect_col")
+                s_ins = df[inspect_col]
+                Q1_i, Q3_i = s_ins.quantile(0.25), s_ins.quantile(0.75)
+                IQR_i = Q3_i - Q1_i
+                mask_i = (s_ins < Q1_i - 1.5*IQR_i) | (s_ins > Q3_i + 1.5*IQR_i)
+                outlier_rows_df = df[mask_i]
+                st.markdown(f'<div class="eda-insight-box"><div class="eda-metric-row"><span class="eda-metric-label">Column</span><span class="eda-metric-val">{inspect_col}</span></div><div class="eda-metric-row"><span class="eda-metric-label">Lower Fence</span><span class="eda-metric-val">{Q1_i - 1.5*IQR_i:.4f}</span></div><div class="eda-metric-row"><span class="eda-metric-label">Upper Fence</span><span class="eda-metric-val">{Q3_i + 1.5*IQR_i:.4f}</span></div><div class="eda-metric-row"><span class="eda-metric-label">Outlier Rows</span><span class="eda-metric-val">{len(outlier_rows_df):,}</span></div></div>', unsafe_allow_html=True)
+                if len(outlier_rows_df) > 0:
+                    st.dataframe(outlier_rows_df.head(20), height=250)
+                else:
+                    st.success(f"✅ No outliers found in {inspect_col}!")
+
+        # ── SUB-TAB 4: TARGET ANALYSIS ──
+        with eda_sub4:
+            st.markdown("#### 🎯 Target Variable Analysis")
+            target_sel = st.selectbox("Select target column to analyze", df.columns.tolist(), key="eda_target_sel")
+            if target_sel:
+                ts = df[target_sel]
+                ptype_eda = detect_problem_type(ts)
+                st.markdown(f"""<div class="eda-insight-box">
+                    <div class="eda-metric-row"><span class="eda-metric-label">Column</span><span class="eda-metric-val">{target_sel}</span></div>
+                    <div class="eda-metric-row"><span class="eda-metric-label">Detected Type</span>
+                    <span class="eda-badge {'eda-badge-green' if ptype_eda=='classification' else 'eda-badge-blue'}">{'🎯 Classification' if ptype_eda=='classification' else '📈 Regression'}</span></div>
+                    <div class="eda-metric-row"><span class="eda-metric-label">Unique Values</span><span class="eda-metric-val">{ts.nunique():,}</span></div>
+                    <div class="eda-metric-row"><span class="eda-metric-label">Missing</span><span class="eda-metric-val">{ts.isnull().sum()} ({ts.isnull().mean()*100:.1f}%)</span></div>
+                </div>""", unsafe_allow_html=True)
+
+                ta1, ta2 = st.columns(2)
+                with ta1:
+                    if ptype_eda == "classification":
+                        vc = ts.value_counts()
+                        fig_tgt = px.pie(values=vc.values, names=vc.index.astype(str),
+                            title=f"🎯 {target_sel} Class Distribution",
+                            color_discrete_sequence=[ACCENT1, ACCENT2, ACCENT3, ACCENTR, ACCENTY])
+                        fig_tgt.update_layout(**chart_layout(height=360))
+                    else:
+                        fig_tgt = px.histogram(df, x=target_sel, nbins=50,
+                            title=f"📈 {target_sel} Distribution",
+                            color_discrete_sequence=[ACCENT1])
+                        fig_tgt.update_layout(**chart_layout(height=360))
+                    st.plotly_chart(fig_tgt, width="stretch")
+
+                with ta2:
+                    if ptype_eda == "classification":
+                        vc = ts.value_counts()
+                        fig_bar_tgt = px.bar(x=vc.index.astype(str), y=vc.values,
+                            title=f"📊 {target_sel} Class Counts",
+                            color=vc.values, color_continuous_scale=[ACCENT2, ACCENT1])
+                        fig_bar_tgt.update_layout(**chart_layout(height=360), coloraxis_showscale=False)
+                        st.plotly_chart(fig_bar_tgt, width="stretch")
+                    else:
+                        fig_box_tgt = px.box(df, y=target_sel,
+                            title=f"📦 {target_sel} Box Plot",
+                            color_discrete_sequence=[ACCENT1])
+                        fig_box_tgt.update_layout(**chart_layout(height=360))
+                        st.plotly_chart(fig_box_tgt, width="stretch")
+
+                # Feature vs Target correlation
+                if num_cols and target_sel in num_cols and len(num_cols) >= 2:
+                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+                    st.markdown(f"#### 🔗 Feature Correlation with `{target_sel}`")
+                    corr_tgt = df[num_cols].corr()[target_sel].drop(target_sel).sort_values(key=abs, ascending=True)
+                    colors_corr = [ACCENTR if v < 0 else ACCENT1 for v in corr_tgt.values]
+                    fig_corr_tgt = go.Figure(go.Bar(
+                        x=corr_tgt.values, y=corr_tgt.index,
+                        orientation="h", marker_color=colors_corr,
+                        text=[f"{v:.3f}" for v in corr_tgt.values], textposition="outside"
+                    ))
+                    fig_corr_tgt.update_layout(**chart_layout(
+                        height=max(350, len(corr_tgt)*28),
+                        title=f"🔗 Correlation of Each Feature with {target_sel}",
+                        shapes=[dict(type="line", x0=0, x1=0, y0=-0.5, y1=len(corr_tgt)-0.5,
+                                    line=dict(color=TEXT3, width=1.5, dash="dot"))]
+                    ))
+                    st.plotly_chart(fig_corr_tgt, width="stretch")
+
+                elif ptype_eda == "classification" and num_cols:
+                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+                    st.markdown(f"#### 📦 Feature Distributions by `{target_sel}` Class")
+                    box_col = st.selectbox("Choose numeric feature", num_cols, key="box_by_target")
+                    fig_box_cls = px.box(df, x=target_sel.astype(str) if hasattr(target_sel, 'astype') else target_sel,
+                                         y=box_col, color=target_sel,
+                                         title=f"📦 {box_col} by {target_sel} Class",
+                                         color_discrete_sequence=[ACCENT1, ACCENT2, ACCENT3, ACCENTR, ACCENTY])
+                    fig_box_cls.update_layout(**chart_layout(height=420))
+                    st.plotly_chart(fig_box_cls, width="stretch")
+
+        # ── SUB-TAB 5: CATEGORICAL ──
+        with eda_sub5:
+            if not cat_cols:
+                st.info("No categorical columns found in this dataset.")
+            else:
+                st.markdown("#### 🔤 Categorical Features Analysis")
+
+                # Summary table
+                cat_summary_rows = []
+                for col in cat_cols:
+                    s = df[col]
+                    vc = s.value_counts()
+                    cat_summary_rows.append({
+                        "Feature": col,
+                        "Unique": s.nunique(),
+                        "Missing%": f"{s.isnull().mean()*100:.1f}%",
+                        "Top Value": str(vc.index[0]) if len(vc) > 0 else "N/A",
+                        "Top Count": int(vc.iloc[0]) if len(vc) > 0 else 0,
+                        "Top%": f"{vc.iloc[0]/len(df)*100:.1f}%" if len(vc) > 0 else "0%",
+                        "Cardinality": "🟢 Low" if s.nunique() <= 5 else "🟡 Medium" if s.nunique() <= 20 else "🔴 High"
+                    })
+                cat_sum_df = pd.DataFrame(cat_summary_rows)
+                st.dataframe(cat_sum_df, height=200)
+
+                st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+                # Cardinality chart
+                fig_card = px.bar(cat_sum_df.sort_values("Unique", ascending=True),
+                    x="Unique", y="Feature", orientation="h",
+                    title="🔤 Unique Values (Cardinality) per Categorical Feature",
+                    color="Unique", color_continuous_scale=[ACCENT1, ACCENTY, ACCENTR])
+                fig_card.update_layout(**chart_layout(height=max(280, len(cat_cols)*35)), coloraxis_showscale=False)
+                st.plotly_chart(fig_card, width="stretch")
+
+                st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+                st.markdown("#### 📋 Value Counts Detail")
+                cat_detail_col = st.selectbox("Select categorical column", cat_cols, key="cat_detail_sel")
+                top_n = st.slider("Top N values", 5, 30, 15, key="cat_top_n")
+                vc_detail = df[cat_detail_col].value_counts().head(top_n)
+
+                cd1, cd2 = st.columns(2)
+                with cd1:
+                    fig_pie_cat = px.pie(values=vc_detail.values, names=vc_detail.index.astype(str),
+                        title=f"🥧 {cat_detail_col} — Pie Chart",
+                        color_discrete_sequence=[ACCENT1, ACCENT2, ACCENT3, ACCENTR, ACCENTY, "#a78bfa","#fb7185","#34d399"])
+                    fig_pie_cat.update_layout(**chart_layout(height=380))
+                    st.plotly_chart(fig_pie_cat, width="stretch")
+                with cd2:
+                    fig_bar_cat = px.bar(x=vc_detail.index.astype(str), y=vc_detail.values,
+                        title=f"📊 {cat_detail_col} — Bar Chart",
+                        color=vc_detail.values, color_continuous_scale=[ACCENT2, ACCENT1])
+                    fig_bar_cat.update_layout(**chart_layout(height=380), coloraxis_showscale=False)
+                    st.plotly_chart(fig_bar_cat, width="stretch")
+
+                # Full value counts table
+                vc_table = pd.DataFrame({
+                    "Value": vc_detail.index.astype(str),
+                    "Count": vc_detail.values,
+                    "Percentage": (vc_detail.values / len(df) * 100).round(2)
+                })
+                st.dataframe(vc_table, height=250)
+
+        # ── SUB-TAB 6: ADVANCED STATS ──
+        with eda_sub6:
+            if not num_cols:
+                st.info("No numerical columns for advanced statistical analysis.")
+            else:
+                st.markdown("#### 📐 Skewness & Kurtosis Analysis")
+                try:
+                    from scipy.stats import skew as _skew2, kurtosis as _kurt2
+                    sk_rows = []
+                    for col in num_cols:
+                        s = df[col].dropna()
+                        if len(s) > 3:
+                            sk_rows.append({
+                                "Feature": col,
+                                "Skewness": round(_skew2(s), 3),
+                                "Kurtosis": round(_kurt2(s), 3),
+                                "Mean": round(s.mean(), 4),
+                                "Std Dev": round(s.std(), 4),
+                                "CV%": round(s.std()/s.mean()*100, 2) if s.mean() != 0 else None,
+                                "Range": round(s.max()-s.min(), 4),
+                                "Normality": "✅ ~Normal" if abs(_skew2(s)) < 0.5 else "⚠️ Skewed" if abs(_skew2(s)) < 1 else "🔴 Highly Skewed"
+                            })
+                    sk_df = pd.DataFrame(sk_rows).sort_values("Skewness", key=abs, ascending=False)
+                    st.dataframe(sk_df, height=280)
+
+                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+
+                    from plotly.subplots import make_subplots as _msp
+                    fig_sk = _msp(rows=1, cols=2, subplot_titles=["Skewness per Feature", "Kurtosis per Feature"])
+                    colors_sk2 = [ACCENTR if abs(v) > 1 else ACCENTY if abs(v) > 0.5 else ACCENT1 for v in sk_df["Skewness"]]
+                    colors_kt2 = [ACCENT3 if abs(v) > 3 else ACCENT2 for v in sk_df["Kurtosis"]]
+                    fig_sk.add_trace(go.Bar(x=sk_df["Skewness"], y=sk_df["Feature"], orientation="h",
+                        marker_color=colors_sk2, name="Skewness",
+                        text=[f"{v:.3f}" for v in sk_df["Skewness"]], textposition="outside"), row=1, col=1)
+                    fig_sk.add_trace(go.Bar(x=sk_df["Kurtosis"], y=sk_df["Feature"], orientation="h",
+                        marker_color=colors_kt2, name="Kurtosis",
+                        text=[f"{v:.3f}" for v in sk_df["Kurtosis"]], textposition="outside"), row=1, col=2)
+                    fig_sk.update_layout(**chart_layout(height=max(350, len(sk_df)*32),
+                        title_text="📐 Skewness (🔴 >|1| highly skewed) & Kurtosis"), showlegend=False)
+                    st.plotly_chart(fig_sk, width="stretch")
+
+                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+                    st.markdown("#### 📊 Enhanced Numeric Summary")
+                    enh_rows = []
+                    for col in num_cols:
+                        s = df[col].dropna()
+                        Q1, Q3 = s.quantile(0.25), s.quantile(0.75)
+                        IQR = Q3 - Q1
+                        n_out = int(((s < Q1-1.5*IQR) | (s > Q3+1.5*IQR)).sum())
+                        enh_rows.append({
+                            "Feature": col,
+                            "Count": int(s.count()),
+                            "Missing%": round(df[col].isnull().mean()*100, 1),
+                            "Mean": round(s.mean(), 4),
+                            "Std": round(s.std(), 4),
+                            "Min": round(s.min(), 4),
+                            "Q1": round(Q1, 4),
+                            "Median": round(s.median(), 4),
+                            "Q3": round(Q3, 4),
+                            "Max": round(s.max(), 4),
+                            "IQR": round(IQR, 4),
+                            "Outliers": n_out,
+                            "Outlier%": round(n_out/len(df)*100, 1),
+                        })
+                    enh_df = pd.DataFrame(enh_rows)
+                    st.dataframe(
+                        enh_df.style
+                            .background_gradient(subset=["Missing%","Outlier%"], cmap="RdYlGn_r")
+                            .format(precision=3),
+                        height=320
+                    )
+
+                    st.markdown(f'<div class="glow-divider"></div>', unsafe_allow_html=True)
+                    st.markdown("#### 🔔 Quick Feature Importance (Pre-Training)")
+                    fi_target = st.selectbox("Select target column", df.columns.tolist(), key="fi_eda_target")
+                    if fi_target and st.button("⭐ Compute Quick Importance", key="fi_eda_btn"):
+                        with st.spinner("Running RandomForest for quick feature importance..."):
+                            try:
+                                from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+                                from sklearn.preprocessing import LabelEncoder
+                                X_q = df.select_dtypes(include="number").drop(columns=[fi_target], errors="ignore").fillna(0)
+                                y_q = df[fi_target].fillna(df[fi_target].mode()[0])
+                                ptype_fi = detect_problem_type(y_q)
+                                if ptype_fi == "classification":
+                                    le = LabelEncoder()
+                                    y_enc = le.fit_transform(y_q.astype(str))
+                                    rf_fi = RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=-1, max_depth=5)
+                                    rf_fi.fit(X_q, y_enc)
+                                else:
+                                    rf_fi = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1, max_depth=5)
+                                    rf_fi.fit(X_q, y_q)
+                                fi_df2 = pd.DataFrame({"Feature": X_q.columns, "Importance": rf_fi.feature_importances_})
+                                fi_df2 = fi_df2.sort_values("Importance", ascending=True)
+                                fig_fi = px.bar(fi_df2, x="Importance", y="Feature", orientation="h",
+                                    title=f"⭐ Feature Importance for predicting `{fi_target}`",
+                                    color="Importance", color_continuous_scale=[ACCENT2, ACCENT1, ACCENTY],
+                                    text=fi_df2["Importance"].round(4))
+                                fig_fi.update_layout(**chart_layout(height=max(300, len(fi_df2)*30)), coloraxis_showscale=False)
+                                fig_fi.update_traces(textposition="outside")
+                                st.plotly_chart(fig_fi, width="stretch")
+                            except Exception as e:
+                                st.error(f"Could not compute: {e}")
+
+                except Exception as e:
+                    st.error(f"Advanced stats error: {e}")
 
     # ═══════════════════════════
     # TAB 3 — TRAIN MODEL
@@ -1539,7 +2256,15 @@ if st.session_state.data is not None:
         # Session state init
         for k, v in [
             ("nb_step", 1), ("nb_ptype", st.session_state.problem_type or "classification"),
-            ("nb_eda", {"distributions":True,"correlation":True,"missing":True,"target_dist":True,"boxplots":False,"scatter_matrix":False,"cat_bars":False,"outlier_plot":False}),
+            ("nb_eda", {
+                "distributions":True,"correlation":True,"missing":True,"target_dist":True,
+                "boxplots":False,"scatter_matrix":False,"cat_bars":False,"outlier_plot":False,
+                # NEW advanced EDA options
+                "target_correlation":True,"feature_importance_eda":True,
+                "skewness_kurtosis":True,"value_counts_table":False,
+                "numeric_summary_styled":True,"categorical_summary":True,
+                "outlier_table":True,"iqr_analysis":True,
+            }),
             ("nb_pre", {"drop_dups":True,"handle_missing":True,"normalize":True,"remove_outliers":False}),
             ("nb_train", {"model_table":True,"bar_chart":True,"radar_chart":True,"feature_importance":False}),
             ("nb_export", {"save_model":True,"load_predict":True,"summary_table":True}),
@@ -1604,15 +2329,18 @@ if st.session_state.data is not None:
 
         st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
 
-        # ── STEP 2: EDA ──
+        # ── STEP 2: EDA (EXPANDED with new options) ──
         with st.container():
             col_dot, col_body = st.columns([1, 12])
             with col_dot:
                 st.markdown(f'<div style="display:flex;flex-direction:column;align-items:center">{dot(2)}{line(2)}</div>', unsafe_allow_html=True)
             with col_body:
                 if step >= 2:
-                    st.markdown(f'<div class="nb-step-title">EDA — Select charts to include</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="nb-step-title">EDA — Select charts & analyses to include</div>', unsafe_allow_html=True)
                     eda = st.session_state.nb_eda
+
+                    # Basic EDA
+                    st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{ACCENT2};margin:.75rem 0 .4rem">📊 Basic Charts</div>', unsafe_allow_html=True)
                     ec1, ec2 = st.columns(2)
                     with ec1:
                         eda["distributions"] = st.checkbox("📊 Distributions histogram", value=eda["distributions"], key="eda_dist")
@@ -1624,9 +2352,24 @@ if st.session_state.data is not None:
                         eda["scatter_matrix"] = st.checkbox("🔵 Scatter matrix",          value=eda["scatter_matrix"], key="eda_scat")
                         eda["cat_bars"]       = st.checkbox("📋 Category bar charts",     value=eda["cat_bars"],       key="eda_cat")
                         eda["outlier_plot"]   = st.checkbox("⚠️ Outlier detection plot",  value=eda["outlier_plot"],   key="eda_out")
+
+                    # Advanced EDA — NEW
+                    st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{ACCENT1};margin:.75rem 0 .4rem">🔬 Advanced EDA (NEW)</div>', unsafe_allow_html=True)
+                    ae1, ae2 = st.columns(2)
+                    with ae1:
+                        eda["target_correlation"]    = st.checkbox("🎯 Target correlation bar chart",       value=eda.get("target_correlation", True),    key="eda_tgt_corr")
+                        eda["skewness_kurtosis"]     = st.checkbox("📐 Skewness & Kurtosis analysis",       value=eda.get("skewness_kurtosis", True),     key="eda_skew")
+                        eda["numeric_summary_styled"]= st.checkbox("📊 Enhanced numeric summary table",     value=eda.get("numeric_summary_styled", True),key="eda_num_sum")
+                        eda["iqr_analysis"]          = st.checkbox("📏 IQR outlier detail table",           value=eda.get("iqr_analysis", True),          key="eda_iqr")
+                    with ae2:
+                        eda["feature_importance_eda"]= st.checkbox("⭐ Quick feature importance (RF-EDA)",  value=eda.get("feature_importance_eda", True), key="eda_fi_eda")
+                        eda["categorical_summary"]   = st.checkbox("🔤 Categorical summary table",          value=eda.get("categorical_summary", True),   key="eda_cat_sum")
+                        eda["value_counts_table"]    = st.checkbox("📋 Full value counts tables",           value=eda.get("value_counts_table", False),   key="eda_vc_tbl")
+                        eda["outlier_table"]         = st.checkbox("🔎 Outlier sample rows table",          value=eda.get("outlier_table", True),         key="eda_out_tbl")
+
                     st.session_state.nb_eda = eda
                     selected_count = sum(1 for v in eda.values() if v)
-                    st.markdown(f'<div style="font-size:.75rem;color:{ACCENT1};margin-top:.5rem">✓ {selected_count} chart(s) selected</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="font-size:.75rem;color:{ACCENT1};margin-top:.5rem">✓ {selected_count} chart(s)/analysis selected</div>', unsafe_allow_html=True)
                     if step == 2:
                         nb2c1, nb2c2 = st.columns([1, 4])
                         with nb2c1:
@@ -1750,7 +2493,6 @@ if st.session_state.data is not None:
                         try:
                             target_for_nb = df.columns[0]
                             if st.session_state.problem_type:
-                                # Use previously selected target if available
                                 pass
                             nb_bytes = generate_notebook(
                                 df=df, target_col=df.columns[0],
@@ -1845,7 +2587,6 @@ if st.session_state.data is not None:
     margin-bottom:1.25rem;
   }}
 
-  /* ── STARS ── */
   .stars-wrap{{
     display:flex;
     justify-content:center;
@@ -1880,7 +2621,6 @@ if st.session_state.data is not None:
   }}
   .star.pop{{animation:starPop .4s cubic-bezier(.34,1.56,.64,1) both;}}
 
-  /* ── LABEL ── */
   .rating-label{{
     text-align:center;
     font-size:.95rem;
@@ -1891,7 +2631,6 @@ if st.session_state.data is not None:
     color:#4ade80;
   }}
 
-  /* ── TEXTAREA ── */
   textarea{{
     width:100%;
     background:{"#141414" if T=="dark" else "#f9fafb"};
@@ -1913,7 +2652,6 @@ if st.session_state.data is not None:
   }}
   textarea::placeholder{{color:{"#4b5563" if T=="dark" else "#9ca3af"};}}
 
-  /* ── SUBMIT BTN ── */
   .submit-btn{{
     display:block;
     width:100%;
@@ -1944,7 +2682,6 @@ if st.session_state.data is not None:
     filter:none;
   }}
 
-  /* ── THANK YOU ── */
   .ty{{
     text-align:center;
     padding:1.5rem 1rem;
@@ -1977,7 +2714,6 @@ if st.session_state.data is not None:
   }}
   .reset-btn:hover{{border-color:#667eea;color:#667eea;}}
 
-  /* ── STATUS ── */
   .status{{font-size:.75rem;text-align:center;margin-top:.6rem;min-height:1.1rem;}}
   .status.ok{{color:#4ade80;}}
   .status.err{{color:#f87171;}}
@@ -1987,7 +2723,6 @@ if st.session_state.data is not None:
 <body>
 <div class="rc" id="ratingCard">
 
-  <!-- RATING FORM -->
   <div id="ratingForm">
     <div class="rc-title">⭐ Rate Your Experience</div>
     <div class="rc-sub">How was your DataForge ML Studio experience?</div>
@@ -2008,7 +2743,6 @@ if st.session_state.data is not None:
     <div class="status" id="statusMsg"></div>
   </div>
 
-  <!-- THANK YOU (hidden initially) -->
   <div class="ty" id="thankYou" style="display:none">
     <div class="ty-stars" id="tyStars"></div>
     <div class="ty-msg" id="tyMsg"></div>
@@ -2021,8 +2755,7 @@ if st.session_state.data is not None:
 </div>
 
 <script>
-  // ── EmailJS init ──
-  emailjs.init("KPju9potPVtR0LXSX");  // Public Key
+  emailjs.init("KPju9potPVtR0LXSX");
 
   const LABELS = ["", "😞 Poor", "😕 Fair", "😊 Good", "😄 Great", "🤩 Excellent!"];
   const COLORS = ["","#f87171","#fb923c","#fbbf24","#4ade80","#4ade80"];
@@ -2036,7 +2769,6 @@ if st.session_state.data is not None:
   const form     = document.getElementById("ratingForm");
   const ty       = document.getElementById("thankYou");
 
-  // ── hover effect ──
   stars.forEach(s => {{
     s.addEventListener("mouseenter", () => {{
       const v = +s.dataset.v;
@@ -2053,7 +2785,6 @@ if st.session_state.data is not None:
       label.style.color = selected ? COLORS[selected] : "";
     }});
 
-    // ── click ──
     s.addEventListener("click", () => {{
       selected = +s.dataset.v;
       stars.forEach((x, i) => {{
@@ -2071,7 +2802,6 @@ if st.session_state.data is not None:
     }});
   }});
 
-  // ── submit ──
   submitBtn.addEventListener("click", () => {{
     if (!selected) return;
     submitBtn.disabled = true;
