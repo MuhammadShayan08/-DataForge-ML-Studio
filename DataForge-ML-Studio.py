@@ -1086,7 +1086,7 @@ def run_memory_safe_training(df, target_col, problem_type, train_size, fold,
 # ─────────────────────────────────────────────
 #  SESSION STATE
 # ─────────────────────────────────────────────
-for k in ["data","problem_type","best_model","results","training_time","dataset_name","cv_fold"]:
+for k in ["data","problem_type","best_model","results","training_time","dataset_name","cv_fold","target_col"]:
     if k not in st.session_state:
         st.session_state[k] = None
 if "theme" not in st.session_state:
@@ -2070,6 +2070,7 @@ if st.session_state.data is not None:
                     st.session_state.best_model    = best
                     st.session_state.results       = results
                     st.session_state.training_time = elapsed
+                    st.session_state.target_col    = target_col
 
                     for w in warn_msgs:
                         warn_box.warning(w)
@@ -2151,8 +2152,9 @@ if st.session_state.data is not None:
                     st.info("💾 Model file generates after training.")
             with ex3:
                 try:
+                    _target_col_nb = st.session_state.get("target_col") or df.columns[0]
                     nb_bytes = generate_notebook(
-                        df=df, target_col=target_col, problem_type=st.session_state.problem_type,
+                        df=df, target_col=_target_col_nb, problem_type=st.session_state.problem_type,
                         results_df=res_df, best_model_name=best_name, top_score=top_score,
                         metric_name=metric_name, dataset_name=str(st.session_state.dataset_name or "dataset"),
                         training_time=st.session_state.training_time or 0,
@@ -2491,11 +2493,9 @@ if st.session_state.data is not None:
 
                         # Generate notebook bytes
                         try:
-                            target_for_nb = df.columns[0]
-                            if st.session_state.problem_type:
-                                pass
+                            target_for_nb = st.session_state.get("target_col") or df.columns[0]
                             nb_bytes = generate_notebook(
-                                df=df, target_col=df.columns[0],
+                                df=df, target_col=target_for_nb,
                                 problem_type=st.session_state.nb_ptype,
                                 results_df=res_nb, best_model_name=bn_nb,
                                 top_score=ts_nb, metric_name=mn_nb,
