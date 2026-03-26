@@ -308,7 +308,7 @@ def generate_notebook(df, target_col, problem_type, results_df, best_model_name,
         "distributions":True,"correlation":True,"missing":True,"target_dist":True,
         "boxplots":True,"scatter_matrix":True,"cat_bars":True,"outlier_plot":True,
         # NEW advanced EDA options
-        "target_correlation":True,"feature_importance_eda":True,
+        "violin_plots":True,"feature_importance_eda":True,
         "skewness_kurtosis":True,"value_counts_table":True,
         "numeric_summary_styled":True,"categorical_summary":True,
         "outlier_table":True,"iqr_analysis":True,
@@ -517,40 +517,37 @@ print(out_df.to_string(index=False))""", "s4_out"))
 
     # ── NEW ADVANCED EDA CELLS ──
 
-    if eda.get("target_correlation") and num_cols and len(num_cols) >= 2:
+    if eda.get("violin_plots") and num_cols:
         if not eda_cells_added:
             cells.append(md_cell(banners["eda"], "s4"))
             eda_cells_added = True
-        cells.append(code_cell(f"""# 🎯 Target Correlation Analysis — which features matter most?
+        cells.append(code_cell(f"""# 🎻 Violin Plots — Distribution shape, spread & outliers in one view
+# Kaggle mein yeh chart bohot popular hai — box plot se zyada informative!
 num_cols = {ncr}
-target = "{target_col}"
-if target in num_cols:
-    corr_with_target = df[num_cols].corr()[target].drop(target).sort_values(key=abs, ascending=True)
-    colors = ["#f87171" if v < 0 else "#4ade80" for v in corr_with_target.values]
-    fig = go.Figure(go.Bar(
-        x=corr_with_target.values, y=corr_with_target.index,
-        orientation="h", marker_color=colors,
-        text=[f"{{v:.3f}}" for v in corr_with_target.values],
-        textposition="outside"
-    ))
-    fig.update_layout(template="plotly_dark", height=max(350, len(corr_with_target)*28),
-        title=f"🎯 Feature Correlation with Target: {{target}}",
-        xaxis_title="Pearson Correlation", yaxis_title="Feature",
-        shapes=[dict(type="line", x0=0, x1=0, y0=-0.5, y1=len(corr_with_target)-0.5,
-                     line=dict(color="#ffffff", width=1.5, dash="dot"))])
-    fig.show()
-    print("\\n📊 Top 5 positively correlated features:")
-    print(corr_with_target.tail(5).to_string())
-    print("\\n📊 Top 5 negatively correlated features:")
-    print(corr_with_target.head(5).to_string())
-else:
-    print(f"ℹ️ Target '{target}' is categorical — showing class-wise distributions instead.")
-    for col in num_cols[:4]:
-        fig = px.box(df, x=target, y=col, color=target,
-                     title=f"📦 {{col}} by Target Class",
-                     color_discrete_sequence=["#4ade80","#60a5fa","#c084fc","#fbbf24","#f87171"])
-        fig.update_layout(template="plotly_dark", height=350)
-        fig.show()""", "s4_tgt_corr"))
+cols_vln = num_cols[:8]
+n_c = min(2, len(cols_vln))
+n_r = (len(cols_vln) + n_c - 1) // n_c
+from plotly.subplots import make_subplots
+fig = make_subplots(rows=n_r, cols=n_c, subplot_titles=cols_vln)
+colors_vln = ["#4ade80","#60a5fa","#c084fc","#fbbf24","#f87171","#fb923c","#34d399","#a78bfa"]
+for i, col in enumerate(cols_vln):
+    fig.add_trace(
+        go.Violin(y=df[col].dropna(), name=col,
+                  box_visible=True,
+                  meanline_visible=True,
+                  points="outliers",
+                  fillcolor=colors_vln[i % len(colors_vln)],
+                  line_color=colors_vln[i % len(colors_vln)],
+                  opacity=0.75),
+        row=i//n_c+1, col=i%n_c+1
+    )
+fig.update_layout(
+    template="plotly_dark", height=320*n_r,
+    title_text="🎻 Violin Plots — Distribution Shape + Outliers + Spread",
+    showlegend=False
+)
+fig.show()
+print("✅ Each violin shows: KDE shape, median line, IQR box, mean line & outlier dots")""", "s4_violin"))
 
     if eda.get("skewness_kurtosis") and num_cols:
         if not eda_cells_added:
@@ -2262,7 +2259,7 @@ if st.session_state.data is not None:
                 "distributions":True,"correlation":True,"missing":True,"target_dist":True,
                 "boxplots":False,"scatter_matrix":False,"cat_bars":False,"outlier_plot":False,
                 # NEW advanced EDA options
-                "target_correlation":True,"feature_importance_eda":True,
+                "violin_plots":True,"feature_importance_eda":True,
                 "skewness_kurtosis":True,"value_counts_table":False,
                 "numeric_summary_styled":True,"categorical_summary":True,
                 "outlier_table":True,"iqr_analysis":True,
@@ -2359,7 +2356,7 @@ if st.session_state.data is not None:
                     st.markdown(f'<div style="font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{ACCENT1};margin:.75rem 0 .4rem">🔬 Advanced EDA (NEW)</div>', unsafe_allow_html=True)
                     ae1, ae2 = st.columns(2)
                     with ae1:
-                        eda["target_correlation"]    = st.checkbox("🎯 Target correlation bar chart",       value=eda.get("target_correlation", True),    key="eda_tgt_corr")
+                        eda["violin_plots"]          = st.checkbox("🎻 Violin plots (all features)",        value=eda.get("violin_plots", True),         key="eda_violin")
                         eda["skewness_kurtosis"]     = st.checkbox("📐 Skewness & Kurtosis analysis",       value=eda.get("skewness_kurtosis", True),     key="eda_skew")
                         eda["numeric_summary_styled"]= st.checkbox("📊 Enhanced numeric summary table",     value=eda.get("numeric_summary_styled", True),key="eda_num_sum")
                         eda["iqr_analysis"]          = st.checkbox("📏 IQR outlier detail table",           value=eda.get("iqr_analysis", True),          key="eda_iqr")
