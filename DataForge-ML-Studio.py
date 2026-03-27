@@ -1833,6 +1833,206 @@ if(ptv==='regression'){{selPtype('regression');}}
             except Exception as nb_err:
                 st.error(f"❌ Notebook generation failed: {nb_err}")
 
+            # ── AI Insights (Claude API) ──
+            st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
+            st.markdown(f"""<div style="background:{'rgba(167,139,250,0.07)' if T=='dark' else 'rgba(124,58,237,0.06)'};border:1px solid {'rgba(167,139,250,0.3)' if T=='dark' else 'rgba(124,58,237,0.25)'};border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1rem;">
+              <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem">
+                <span style="font-size:1.5rem">🤖</span>
+                <div>
+                  <div style="font-size:.9rem;font-weight:800;color:{'#c084fc' if T=='dark' else '#7c3aed'}">AI Insights — Powered by Claude</div>
+                  <div style="font-size:.72rem;color:{TEXT3}">Get deep AI analysis of your trained model and dataset</div>
+                </div>
+              </div>
+            </div>""", unsafe_allow_html=True)
+
+            # Build context for Claude
+            res_for_ai = st.session_state.results
+            mc_ai = "Model" if "Model" in res_for_ai.columns else res_for_ai.columns[0]
+            nr_ai = res_for_ai.select_dtypes(include=[np.number]).columns.tolist()
+            bn_ai = res_for_ai.iloc[0][mc_ai]
+            mn_ai = nr_ai[0] if nr_ai else "Score"
+            ts_ai = float(res_for_ai.iloc[0][mn_ai]) if nr_ai else 0.0
+            tc_ai = st.session_state.get("target_col") or df.columns[0]
+            pt_ai = st.session_state.problem_type or "classification"
+            ds_ai = str(st.session_state.dataset_name or "dataset")
+            tt_ai = st.session_state.training_time or 0
+            folds_ai = st.session_state.cv_fold or 5
+            null_pct_ai = round(df.isnull().sum().sum() / df.size * 100, 2)
+            dup_ai = int(df.duplicated().sum())
+            num_cols_ai = df.select_dtypes(include=[np.number]).columns.tolist()
+            cat_cols_ai = df.select_dtypes(include=["object","category"]).columns.tolist()
+
+            # Top 5 models summary
+            try:
+                top5_str = res_for_ai[[mc_ai] + nr_ai[:4]].head(5).to_string(index=False)
+            except:
+                top5_str = str(res_for_ai.head(5))
+
+            ai_context = f"""Dataset: {ds_ai}
+Rows: {len(df):,} | Columns: {len(df.columns)}
+Numerical features: {len(num_cols_ai)} | Categorical features: {len(cat_cols_ai)}
+Missing values: {null_pct_ai}% | Duplicate rows: {dup_ai}
+Target column: {tc_ai}
+Problem type: {pt_ai}
+Best model: {bn_ai}
+Best score ({mn_ai}): {ts_ai:.4f}
+CV Folds: {folds_ai}
+Training time: {tt_ai:.1f}s
+
+Top 5 Models:
+{top5_str}"""
+
+            ai_col1, ai_col2 = st.columns([3,1])
+            with ai_col1:
+                ai_insight_type = st.selectbox(
+                    "Select Insight Type",
+                    ["🔍 Full Model Analysis", "📊 Data Quality Report", "🏆 Model Comparison Deep Dive",
+                     "💡 Feature Engineering Tips", "🚀 Deployment Recommendations", "📈 How to Improve Score"],
+                    key="ai_insight_type_select",
+                    label_visibility="collapsed"
+                )
+            with ai_col2:
+                ai_clicked = st.button("✨ Generate AI Insights", key="ai_insights_btn")
+
+            if "ai_insight_result" not in st.session_state:
+                st.session_state.ai_insight_result = None
+            if "ai_insight_type_last" not in st.session_state:
+                st.session_state.ai_insight_type_last = None
+
+            if ai_clicked:
+                insight_prompts = {
+                    "🔍 Full Model Analysis": f"""You are an expert ML engineer analyzing results from DataForge ML Studio.
+
+{ai_context}
+
+Provide a comprehensive analysis including:
+1. **Model Performance Assessment** — Is {ts_ai:.4f} {mn_ai} good for this type of problem? What does it mean practically?
+2. **Data Quality Insights** — Issues and concerns from the dataset stats
+3. **Why {bn_ai} Won** — Explain why this algorithm likely outperformed others
+4. **Overfitting Risk** — Assess the risk based on dataset size and score
+5. **Top 3 Actionable Recommendations** — Specific steps to improve further
+6. **Kaggle Competitiveness** — How would this model perform in a real competition?
+
+Use emojis, be specific, and give practical advice. Format with clear headings.""",
+
+                    "📊 Data Quality Report": f"""You are a data scientist reviewing dataset quality.
+
+{ai_context}
+
+Provide a detailed data quality report:
+1. **Overall Health Score** (0-100) with reasoning
+2. **Missing Values Analysis** — Impact and recommended imputation strategies
+3. **Feature Mix Assessment** — {len(num_cols_ai)} numerical + {len(cat_cols_ai)} categorical — is this balanced?
+4. **Potential Data Leakage Risks** — Common pitfalls for {pt_ai} problems
+5. **Recommended Preprocessing Steps** — Specific to this dataset profile
+6. **Data Collection Improvements** — What additional data would help most?
+
+Be specific and actionable. Use emojis.""",
+
+                    "🏆 Model Comparison Deep Dive": f"""You are an AutoML expert explaining model selection.
+
+{ai_context}
+
+Analyze the model comparison results:
+1. **Why {bn_ai} is Best** — Technical explanation of its strengths for this problem
+2. **Runner-up Analysis** — What the 2nd best model does differently
+3. **Tree vs Linear vs Ensemble** — Which family won and why it suits this data
+4. **Hyperparameter Tuning Potential** — How much improvement is possible with tuning {bn_ai}?
+5. **Ensemble Opportunity** — Would stacking these models help?
+6. **Training Efficiency** — Was {tt_ai:.1f}s training time reasonable?
+
+Be technical but understandable.""",
+
+                    "💡 Feature Engineering Tips": f"""You are a feature engineering specialist.
+
+{ai_context}
+
+Suggest feature engineering improvements:
+1. **Top 3 New Features to Create** — Specific to this dataset ({ds_ai}, target: {tc_ai})
+2. **Interaction Features** — Which numerical pairs to multiply/divide
+3. **Categorical Encoding Improvements** — Beyond basic label encoding
+4. **Date/Time Features** (if applicable) — Temporal patterns to extract
+5. **Feature Selection** — Which features might be hurting the model
+6. **Target Encoding** — When and how to use it for {pt_ai}
+7. **Expected Score Improvement** — Realistic estimate after these changes
+
+Give very specific, code-hintable suggestions.""",
+
+                    "🚀 Deployment Recommendations": f"""You are an MLOps engineer reviewing this model for production.
+
+{ai_context}
+
+Provide deployment guidance:
+1. **Production Readiness Score** (0-100) — Is {ts_ai:.4f} {mn_ai} good enough for production?
+2. **Serving Strategy** — REST API vs batch vs real-time for this use case
+3. **Monitoring Requirements** — What metrics to track in production
+4. **Retraining Schedule** — How often should this model be retrained?
+5. **Infrastructure Needs** — Estimated compute for {bn_ai} serving
+6. **A/B Testing Plan** — How to safely roll out this model
+7. **Risk Assessment** — What could go wrong and mitigation strategies
+
+Be practical and specific.""",
+
+                    "📈 How to Improve Score": f"""You are an ML competition expert.
+
+{ai_context}
+
+Current score: {ts_ai:.4f} {mn_ai} with {bn_ai}
+
+Give a step-by-step improvement roadmap:
+1. **Quick Wins (1-2 hours)** — Immediate changes for +score
+2. **Hyperparameter Tuning** — Specific parameters to tune for {bn_ai}
+3. **Feature Engineering Priority** — Top 3 features to add
+4. **Data Augmentation** — If applicable for {pt_ai}
+5. **Advanced Ensemble Methods** — Stacking, blending strategy
+6. **Expected Score Range** — Realistic target after all improvements
+7. **Effort vs Impact Matrix** — Which improvements give best ROI
+
+Be very specific with numbers and parameters."""
+                }
+
+                prompt = insight_prompts.get(ai_insight_type, insight_prompts["🔍 Full Model Analysis"])
+
+                with st.spinner("🤖 Claude is analyzing your ML results..."):
+                    try:
+                        import requests as _req
+                        resp = _req.post(
+                            "https://api.anthropic.com/v1/messages",
+                            headers={"Content-Type": "application/json"},
+                            json={
+                                "model": "claude-sonnet-4-20250514",
+                                "max_tokens": 1500,
+                                "messages": [{"role": "user", "content": prompt}]
+                            },
+                            timeout=60
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            insight_text = data["content"][0]["text"]
+                            st.session_state.ai_insight_result = insight_text
+                            st.session_state.ai_insight_type_last = ai_insight_type
+                        else:
+                            st.error(f"❌ API Error {resp.status_code}: {resp.text[:200]}")
+                    except Exception as ai_err:
+                        st.error(f"❌ Could not connect to Claude API: {ai_err}")
+
+            # Display AI Insights result
+            if st.session_state.ai_insight_result:
+                ai_bg = "rgba(167,139,250,0.06)" if T=="dark" else "rgba(124,58,237,0.04)"
+                ai_border = "rgba(167,139,250,0.25)" if T=="dark" else "rgba(124,58,237,0.20)"
+                ai_type_lbl = st.session_state.get("ai_insight_type_last","AI Insights")
+                st.markdown(f"""<div style="background:{ai_bg};border:1px solid {ai_border};border-radius:14px;padding:1.25rem 1.5rem;margin-top:.75rem;">
+                  <div style="font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{'#a78bfa' if T=='dark' else '#7c3aed'};margin-bottom:.75rem;">{ai_type_lbl}</div>
+                </div>""", unsafe_allow_html=True)
+                st.markdown(st.session_state.ai_insight_result)
+                st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
+                # Copy / regenerate buttons
+                regen_col1, regen_col2 = st.columns([1,4])
+                with regen_col1:
+                    if st.button("🔄 Regenerate", key="ai_regen_btn"):
+                        st.session_state.ai_insight_result = None
+                        st.rerun()
+
             # ── Star Rating ──
             st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
             _au = str(st.session_state.get("nb_author_name","Anonymous"))
