@@ -1993,12 +1993,17 @@ Be very specific with numbers and parameters."""
 
                 prompt = insight_prompts.get(ai_insight_type, insight_prompts["🔍 Full Model Analysis"])
 
+                _api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
                 with st.spinner("🤖 Claude is analyzing your ML results..."):
                     try:
                         import requests as _req
                         resp = _req.post(
                             "https://api.anthropic.com/v1/messages",
-                            headers={"Content-Type": "application/json"},
+                            headers={
+                                "Content-Type": "application/json",
+                                "x-api-key": _api_key,
+                                "anthropic-version": "2023-06-01"
+                            },
                             json={
                                 "model": "claude-sonnet-4-20250514",
                                 "max_tokens": 1500,
