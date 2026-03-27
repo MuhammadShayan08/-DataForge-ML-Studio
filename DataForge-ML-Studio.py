@@ -1839,7 +1839,7 @@ if(ptv==='regression'){{selPtype('regression');}}
               <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem">
                 <span style="font-size:1.5rem">🤖</span>
                 <div>
-                  <div style="font-size:.9rem;font-weight:800;color:{'#c084fc' if T=='dark' else '#7c3aed'}">AI Insights — Powered by Claude</div>
+                  <div style="font-size:.9rem;font-weight:800;color:{'#c084fc' if T=='dark' else '#7c3aed'}">AI Insights — Powered by Groq (Llama 3.3 70B)</div>
                   <div style="font-size:.72rem;color:{TEXT3}">Get deep AI analysis of your trained model and dataset</div>
                 </div>
               </div>
@@ -1993,19 +1993,21 @@ Be very specific with numbers and parameters."""
 
                 prompt = insight_prompts.get(ai_insight_type, insight_prompts["🔍 Full Model Analysis"])
 
-                _api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
-                with st.spinner("🤖 Claude is analyzing your ML results..."):
+                _api_key = st.secrets.get("GROQ_API_KEY", "")
+                if not _api_key:
+                    st.error("❌ GROQ_API_KEY not found in secrets! Add it in App Settings → Secrets")
+                    st.stop()
+                with st.spinner("🤖 Groq AI is analyzing your ML results..."):
                     try:
                         import requests as _req
                         resp = _req.post(
-                            "https://api.anthropic.com/v1/messages",
+                            "https://api.groq.com/openai/v1/chat/completions",
                             headers={
                                 "Content-Type": "application/json",
-                                "x-api-key": _api_key,
-                                "anthropic-version": "2023-06-01"
+                                "Authorization": f"Bearer {_api_key}"
                             },
                             json={
-                                "model": "claude-sonnet-4-20250514",
+                                "model": "llama-3.3-70b-versatile",
                                 "max_tokens": 1500,
                                 "messages": [{"role": "user", "content": prompt}]
                             },
@@ -2013,7 +2015,7 @@ Be very specific with numbers and parameters."""
                         )
                         if resp.status_code == 200:
                             data = resp.json()
-                            insight_text = data["content"][0]["text"]
+                            insight_text = data["choices"][0]["message"]["content"]
                             st.session_state.ai_insight_result = insight_text
                             st.session_state.ai_insight_type_last = ai_insight_type
                         else:
