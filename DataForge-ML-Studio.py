@@ -2028,17 +2028,33 @@ Be very specific with numbers and parameters."""
                 ai_bg = "rgba(167,139,250,0.06)" if T=="dark" else "rgba(124,58,237,0.04)"
                 ai_border = "rgba(167,139,250,0.25)" if T=="dark" else "rgba(124,58,237,0.20)"
                 ai_type_lbl = st.session_state.get("ai_insight_type_last","AI Insights")
-                st.markdown(f"""<div style="background:{ai_bg};border:1px solid {ai_border};border-radius:14px;padding:1.25rem 1.5rem;margin-top:.75rem;">
-                  <div style="font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:{'#a78bfa' if T=='dark' else '#7c3aed'};margin-bottom:.75rem;">{ai_type_lbl}</div>
+                insight_txt = st.session_state.ai_insight_result
+
+                # Render with forced white text in dark card
+                st.markdown(f"""
+                <div style="background:{ai_bg};border:1px solid {ai_border};border-radius:14px;padding:1.5rem 1.75rem;margin-top:.75rem;">
+                  <div style="font-size:.65rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:{'#a78bfa' if T=='dark' else '#7c3aed'};margin-bottom:1rem;">{ai_type_lbl}</div>
+                  <div style="color:{'#f0f6ff' if T=='dark' else '#111827'};font-size:.88rem;line-height:1.8;white-space:pre-wrap;">{insight_txt}</div>
                 </div>""", unsafe_allow_html=True)
-                st.markdown(st.session_state.ai_insight_result)
+
                 st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
-                # Copy / regenerate buttons
-                regen_col1, regen_col2 = st.columns([1,4])
+
+                # Buttons row — Regenerate + Download
+                regen_col1, regen_col2, regen_col3 = st.columns([1,1,3])
                 with regen_col1:
                     if st.button("🔄 Regenerate", key="ai_regen_btn"):
                         st.session_state.ai_insight_result = None
                         st.rerun()
+                with regen_col2:
+                    # Download as .txt
+                    dl_txt = ai_type_lbl + "\n" + "="*60 + "\n\n" + insight_txt
+                    st.download_button(
+                        label="📥 Download",
+                        data=dl_txt.encode("utf-8"),
+                        file_name=f"ai_insights_{ai_type_lbl[:20].replace(' ','_').replace('/','')}.txt",
+                        mime="text/plain",
+                        key="ai_download_btn"
+                    )
 
             # ── Star Rating ──
             st.markdown('<div class="glow-divider"></div>', unsafe_allow_html=True)
