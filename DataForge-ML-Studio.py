@@ -1839,7 +1839,7 @@ if(ptv==='regression'){{selPtype('regression');}}
               <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem">
                 <span style="font-size:1.5rem">🤖</span>
                 <div>
-                  <div style="font-size:.9rem;font-weight:800;color:{'#c084fc' if T=='dark' else '#7c3aed'}">AI Insights — Powered by CodeXperts</div>
+                  <div style="font-size:.9rem;font-weight:800;color:{'#c084fc' if T=='dark' else '#7c3aed'}">AI Insights — Powered by CodGenZ</div>
                   <div style="font-size:.72rem;color:{TEXT3}">Get deep AI analysis of your trained model and dataset</div>
                 </div>
               </div>
