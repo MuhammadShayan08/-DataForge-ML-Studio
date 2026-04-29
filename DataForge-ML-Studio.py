@@ -1289,7 +1289,7 @@ if st.session_state.data is not None:
 *{{box-sizing:border-box;margin:0;padding:0;}}
 body{{background:#080b12;color:#e2e8f0;font-family:'Space Grotesk',sans-serif;overflow-x:hidden;}}
 :root{{--bg0:#080b12;--bg1:#0d1117;--bg2:#111827;--bg3:#1a2234;--border:#1e3a5f;--border2:#2d4f7c;--green:#22d3a0;--blue:#38bdf8;--purple:#a78bfa;--amber:#fbbf24;--red:#f87171;--text1:#f0f6ff;--text2:#94a3b8;--text3:#475569;}}
-.shell{{display:grid;grid-template-columns:240px 1fr;min-height:600px;max-height:780px;overflow:hidden;}}
+.shell{{display:grid;grid-template-columns:240px 1fr;min-height:600px;max-height:860px;overflow:hidden;}}
 /* RAIL */
 .rail{{background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;min-width:0;overflow:hidden;}}
 .rail-logo{{padding:.85rem 1.1rem .75rem;border-bottom:1px solid var(--border);}}
@@ -1395,7 +1395,7 @@ body{{background:#080b12;color:#e2e8f0;font-family:'Space Grotesk',sans-serif;ov
 .nbdot{{width:8px;height:8px;border-radius:50%;}}
 .dr{{background:#f87171;}}.dy{{background:#fbbf24;}}.dg{{background:#4ade80;}}
 .nbfn{{font-size:.62rem;color:var(--text3);margin-left:.35rem;font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
-.nb-cells{{padding:.65rem;display:flex;flex-direction:column;gap:.35rem;max-height:190px;overflow-y:auto;}}
+.nb-cells{{padding:.65rem;display:flex;flex-direction:column;gap:.35rem;max-height:280px;overflow-y:auto;}}
 .nbc{{border-radius:6px;font-size:.62rem;font-family:'JetBrains Mono',monospace;position:relative;overflow:hidden;}}
 .nbc-md{{background:rgba(167,139,250,.06);border:1px solid rgba(167,139,250,.2);padding:.4rem .65rem;color:var(--purple);}}
 .nbc-code{{background:rgba(56,189,248,.05);border:1px solid rgba(56,189,248,.15);padding:.4rem .65rem .4rem 1.8rem;color:var(--blue);}}
@@ -1779,7 +1779,7 @@ if(ptv==='regression'){{selPtype('regression');}}
 </html>
 """
 
-        st.components.v1.html(nb_builder_html, height=800, scrolling=False)
+        st.components.v1.html(nb_builder_html, height=920, scrolling=False)
 
         # ── Download button below the HTML component ──
         if has_results:
